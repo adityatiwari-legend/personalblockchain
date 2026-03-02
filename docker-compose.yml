@@ -4,6 +4,7 @@ services:
     container_name: blockchain_node1
     command: >
       --port 5000 --http-port 8000 --difficulty 2
+      --name CryptixChain
       --peers node2:5000,node3:5000
     ports:
       - "5001:5000"
@@ -17,6 +18,7 @@ services:
     container_name: blockchain_node2
     command: >
       --port 5000 --http-port 8000 --difficulty 2
+      --name CryptixChain
       --peers node1:5000,node3:5000
     ports:
       - "5002:5000"
@@ -32,6 +34,7 @@ services:
     container_name: blockchain_node3
     command: >
       --port 5000 --http-port 8000 --difficulty 2
+      --name CryptixChain
       --peers node1:5000,node2:5000
     ports:
       - "5003:5000"

@@ -5,8 +5,10 @@
 namespace blockchain
 {
 
-  Blockchain::Blockchain(uint32_t difficulty) : difficulty_(difficulty)
+  Blockchain::Blockchain(uint32_t difficulty, std::string name)
+      : difficulty_(difficulty), name_(std::move(name))
   {
+    std::cout << "[Blockchain] Name: " << name_ << std::endl;
     std::cout << "[Blockchain] Initializing with difficulty " << difficulty
               << std::endl;
     std::cout << "[Blockchain] Mining genesis block..." << std::endl;

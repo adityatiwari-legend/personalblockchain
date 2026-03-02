@@ -52,6 +52,7 @@ struct Config
   uint16_t p2pPort = 5000;
   uint16_t httpPort = 8000;
   uint32_t difficulty = 2;
+  std::string name = "PersonalBlockchain";
   std::vector<PeerAddress> peers;
 };
 
@@ -74,6 +75,10 @@ Config parseArgs(int argc, char *argv[])
     else if (arg == "--difficulty" && i + 1 < argc)
     {
       config.difficulty = static_cast<uint32_t>(std::stoi(argv[++i]));
+    }
+    else if (arg == "--name" && i + 1 < argc)
+    {
+      config.name = argv[++i];
     }
     else if (arg == "--peers" && i + 1 < argc)
     {
@@ -110,6 +115,7 @@ Config parseArgs(int argc, char *argv[])
                 << "  --port <port>        P2P port (default: 5000)\n"
                 << "  --http-port <port>   HTTP API port (default: 8000)\n"
                 << "  --difficulty <d>     Mining difficulty (default: 2)\n"
+                << "  --name <name>        Blockchain name (default: PersonalBlockchain)\n"
                 << "  --peers <addrs>      Comma-separated peer addresses\n"
                 << "                       Format: host:port or just port\n"
                 << "                       Example: node2:5000,node3:5000\n"
@@ -131,6 +137,7 @@ int main(int argc, char *argv[])
   std::cout << "========================================\n"
             << "  PersonalBlockchain Node v1.0.0\n"
             << "========================================\n"
+            << "  Chain Name:  " << config.name << "\n"
             << "  P2P Port:    " << config.p2pPort << "\n"
             << "  HTTP Port:   " << config.httpPort << "\n"
             << "  Difficulty:  " << config.difficulty << "\n"
@@ -155,7 +162,7 @@ int main(int argc, char *argv[])
   try
   {
     // Initialize blockchain
-    blockchain::Blockchain chain(config.difficulty);
+    blockchain::Blockchain chain(config.difficulty, config.name);
 
     // Initialize Boost ASIO
     boost::asio::io_context ioContext;

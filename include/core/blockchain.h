@@ -4,100 +4,104 @@
 #include "state/state_manager.h"
 #include "transaction/transaction.h"
 
-
 #include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
-
-namespace blockchain {
-
-/**
- * The main Blockchain class. Manages the chain of blocks,
- * the transaction mempool, and consensus rules.
- */
-class Blockchain {
-public:
-  /**
-   * Construct a new blockchain with the given difficulty.
-   * Creates the genesis block automatically.
-   */
-  explicit Blockchain(uint32_t difficulty = 2);
+namespace blockchain
+{
 
   /**
-   * Add a transaction to the mempool after validation.
-   * Checks: signature verification, replay prevention, double-spend.
-   * @return true if transaction was accepted
+   * The main Blockchain class. Manages the chain of blocks,
+   * the transaction mempool, and consensus rules.
    */
-  bool addTransaction(const Transaction &tx);
+  class Blockchain
+  {
+  public:
+    /**
+     * Construct a new blockchain with the given difficulty and name.
+     * Creates the genesis block automatically.
+     */
+    explicit Blockchain(uint32_t difficulty = 2, std::string name = "PersonalBlockchain");
 
-  /**
-   * Mine pending transactions into a new block.
-   * @param minerAddress The public key to receive the mining reward
-   * @return The newly mined block
-   */
-  Block minePendingTransactions(const std::string &minerAddress);
+    /**
+     * Add a transaction to the mempool after validation.
+     * Checks: signature verification, replay prevention, double-spend.
+     * @return true if transaction was accepted
+     */
+    bool addTransaction(const Transaction &tx);
 
-  /**
-   * Validate the entire chain from genesis to tip.
-   * @return true if the chain is valid
-   */
-  bool isChainValid() const;
+    /**
+     * Mine pending transactions into a new block.
+     * @param minerAddress The public key to receive the mining reward
+     * @return The newly mined block
+     */
+    Block minePendingTransactions(const std::string &minerAddress);
 
-  /**
-   * Validate an external chain.
-   * @return true if the chain is valid
-   */
-  static bool isChainValid(const std::vector<Block> &chain);
+    /**
+     * Validate the entire chain from genesis to tip.
+     * @return true if the chain is valid
+     */
+    bool isChainValid() const;
 
-  /**
-   * Replace the current chain if the new chain is longer and valid.
-   * Implements the longest-valid-chain consensus rule.
-   * @return true if chain was replaced
-   */
-  bool replaceChain(const std::vector<Block> &newChain);
+    /**
+     * Validate an external chain.
+     * @return true if the chain is valid
+     */
+    static bool isChainValid(const std::vector<Block> &chain);
 
-  /** Get the full chain. */
-  std::vector<Block> getChain() const;
+    /**
+     * Replace the current chain if the new chain is longer and valid.
+     * Implements the longest-valid-chain consensus rule.
+     * @return true if chain was replaced
+     */
+    bool replaceChain(const std::vector<Block> &newChain);
 
-  /** Get the latest block. */
-  Block getLatestBlock() const;
+    /** Get the full chain. */
+    std::vector<Block> getChain() const;
 
-  /** Get the mempool (pending transactions). */
-  std::vector<Transaction> getMempool() const;
+    /** Get the latest block. */
+    Block getLatestBlock() const;
 
-  /** Get chain length. */
-  size_t getChainLength() const;
+    /** Get the mempool (pending transactions). */
+    std::vector<Transaction> getMempool() const;
 
-  /** Get difficulty. */
-  uint32_t getDifficulty() const { return difficulty_; }
+    /** Get chain length. */
+    size_t getChainLength() const;
 
-  /** Serialize full chain to JSON. */
-  nlohmann::json chainToJson() const;
+    /** Get difficulty. */
+    uint32_t getDifficulty() const { return difficulty_; }
 
-  /** Deserialize chain from JSON. */
-  void chainFromJson(const nlohmann::json &j);
+    /** Get blockchain name. */
+    std::string getName() const { return name_; }
 
-  /** Set callback for when a new block is added. */
-  void setOnBlockAdded(std::function<void(const Block &)> callback);
+    /** Serialize full chain to JSON. */
+    nlohmann::json chainToJson() const;
 
-  /** Set callback for when a new transaction is added to mempool. */
-  void setOnTransactionAdded(std::function<void(const Transaction &)> callback);
+    /** Deserialize chain from JSON. */
+    void chainFromJson(const nlohmann::json &j);
 
-private:
-  uint32_t difficulty_;
-  std::vector<Block> chain_;
-  std::vector<Transaction> mempool_;
-  StateManager stateManager_;
-  mutable std::mutex mutex_;
+    /** Set callback for when a new block is added. */
+    void setOnBlockAdded(std::function<void(const Block &)> callback);
 
-  // Event callbacks
-  std::function<void(const Block &)> onBlockAdded_;
-  std::function<void(const Transaction &)> onTransactionAdded_;
+    /** Set callback for when a new transaction is added to mempool. */
+    void setOnTransactionAdded(std::function<void(const Transaction &)> callback);
 
-  /** Check if a transaction already exists in the mempool. */
-  bool isInMempool(const std::string &txID) const;
-};
+  private:
+    uint32_t difficulty_;
+    std::string name_;
+    std::vector<Block> chain_;
+    std::vector<Transaction> mempool_;
+    StateManager stateManager_;
+    mutable std::mutex mutex_;
+
+    // Event callbacks
+    std::function<void(const Block &)> onBlockAdded_;
+    std::function<void(const Transaction &)> onTransactionAdded_;
+
+    /** Check if a transaction already exists in the mempool. */
+    bool isInMempool(const std::string &txID) const;
+  };
 
 } // namespace blockchain

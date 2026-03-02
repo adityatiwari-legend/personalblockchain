@@ -405,6 +405,7 @@ namespace blockchain
     HttpServer::HttpResponse HttpServer::handleGetChain()
     {
       nlohmann::json j;
+      j["name"] = blockchain_.getName();
       j["length"] = blockchain_.getChainLength();
       j["chain"] = blockchain_.chainToJson();
 
@@ -447,6 +448,7 @@ namespace blockchain
     {
       nlohmann::json j;
       j["status"] = "ok";
+      j["name"] = blockchain_.getName();
       j["chainLength"] = blockchain_.getChainLength();
       j["difficulty"] = blockchain_.getDifficulty();
       j["peerCount"] = node_.getPeerList().size();
