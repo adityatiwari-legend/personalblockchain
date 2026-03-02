@@ -1,0 +1,47 @@
+services:
+  node1:
+    build: .
+    container_name: blockchain_node1
+    command: >
+      --port 5000 --http-port 8000 --difficulty 2
+      --peers node2:5000,node3:5000
+    ports:
+      - "5001:5000"
+      - "8001:8000"
+    networks:
+      - blockchain_net
+    restart: unless-stopped
+
+  node2:
+    build: .
+    container_name: blockchain_node2
+    command: >
+      --port 5000 --http-port 8000 --difficulty 2
+      --peers node1:5000,node3:5000
+    ports:
+      - "5002:5000"
+      - "8002:8000"
+    networks:
+      - blockchain_net
+    restart: unless-stopped
+    depends_on:
+      - node1
+
+  node3:
+    build: .
+    container_name: blockchain_node3
+    command: >
+      --port 5000 --http-port 8000 --difficulty 2
+      --peers node1:5000,node2:5000
+    ports:
+      - "5003:5000"
+      - "8003:8000"
+    networks:
+      - blockchain_net
+    restart: unless-stopped
+    depends_on:
+      - node1
+
+networks:
+  blockchain_net:
+    driver: bridge
