@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PersonalBlockchain VERSION 1.0.0 LANGUAGES CXX)
+project(PersonalBlockchain VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,11 @@ target_link_libraries(blockchain_node PRIVATE
     Boost::system
     Threads::Threads
 )
+
+# std::filesystem may require explicit linking on GCC < 9
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    target_link_libraries(blockchain_node PRIVATE stdc++fs)
+endif()
 
 # Platform-specific settings
 if(WIN32)

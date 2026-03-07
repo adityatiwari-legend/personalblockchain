@@ -5,10 +5,14 @@ services:
     command: >
       --port 5000 --http-port 8000 --difficulty 2
       --name CryptixChain
+      --data-dir /app/data
+      --consensus pow
       --peers node2:5000,node3:5000
     ports:
       - "5001:5000"
       - "8001:8000"
+    volumes:
+      - node1_data:/app/data
     networks:
       - blockchain_net
     restart: unless-stopped
@@ -19,10 +23,14 @@ services:
     command: >
       --port 5000 --http-port 8000 --difficulty 2
       --name CryptixChain
+      --data-dir /app/data
+      --consensus pow
       --peers node1:5000,node3:5000
     ports:
       - "5002:5000"
       - "8002:8000"
+    volumes:
+      - node2_data:/app/data
     networks:
       - blockchain_net
     restart: unless-stopped
@@ -35,10 +43,14 @@ services:
     command: >
       --port 5000 --http-port 8000 --difficulty 2
       --name CryptixChain
+      --data-dir /app/data
+      --consensus pow
       --peers node1:5000,node2:5000
     ports:
       - "5003:5000"
       - "8003:8000"
+    volumes:
+      - node3_data:/app/data
     networks:
       - blockchain_net
     restart: unless-stopped
@@ -48,3 +60,8 @@ services:
 networks:
   blockchain_net:
     driver: bridge
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:

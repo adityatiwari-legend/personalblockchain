@@ -226,6 +226,10 @@ namespace blockchain
       {
         return handleGetPeers();
       }
+      if (req.method == "GET" && req.path == "/peers/scores")
+      {
+        return handleGetPeerScores();
+      }
       if (req.method == "GET" && req.path == "/health")
       {
         return handleHealth();
@@ -448,11 +452,40 @@ namespace blockchain
     {
       nlohmann::json j;
       j["status"] = "ok";
+      j["version"] = "2.0.0";
       j["name"] = blockchain_.getName();
       j["chainLength"] = blockchain_.getChainLength();
       j["difficulty"] = blockchain_.getDifficulty();
+      j["consensus"] = blockchain_.getConsensusName();
       j["peerCount"] = node_.getPeerList().size();
       j["mempoolSize"] = blockchain_.getMempool().size();
+
+      HttpResponse resp;
+      resp.body = j.dump(2);
+      return resp;
+    }
+
+    HttpServer::HttpResponse HttpServer::handleGetPeerScores()
+    {
+      const auto &scorer = node_.getPeerScorer();
+      auto allPeers = scorer.getAllPeers();
+
+      nlohmann::json peers = nlohmann::json::array();
+      for (const auto &[key, info] : allPeers)
+      {
+        nlohmann::json p;
+        p["endpoint"] = key;
+        p["host"] = info.host;
+        p["port"] = info.port;
+        p["score"] = info.score;
+        p["banned"] = info.banned;
+        p["invalidBlocks"] = info.invalidBlockCount;
+        peers.push_back(p);
+      }
+
+      nlohmann::json j;
+      j["count"] = allPeers.size();
+      j["peers"] = peers;
 
       HttpResponse resp;
       resp.body = j.dump(2);

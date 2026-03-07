@@ -5,12 +5,53 @@
 namespace blockchain
 {
 
-  Blockchain::Blockchain(uint32_t difficulty, std::string name)
-      : difficulty_(difficulty), name_(std::move(name))
+  Blockchain::Blockchain(uint32_t difficulty, std::string name,
+                         std::shared_ptr<consensus::IConsensusEngine> consensusEngine,
+                         const std::string &dataDir)
+      : difficulty_(difficulty), name_(std::move(name)),
+        consensusEngine_(std::move(consensusEngine))
   {
     std::cout << "[Blockchain] Name: " << name_ << std::endl;
     std::cout << "[Blockchain] Initializing with difficulty " << difficulty
               << std::endl;
+
+    if (consensusEngine_)
+    {
+      std::cout << "[Blockchain] Consensus engine: " << consensusEngine_->name() << std::endl;
+    }
+    else
+    {
+      std::cout << "[Blockchain] Consensus engine: None (legacy mode)" << std::endl;
+    }
+
+    // ─── Initialize persistent storage ─────────────────────────────
+    if (!dataDir.empty())
+    {
+      storage_ = std::make_unique<storage::LevelDBManager>(dataDir);
+
+      // Try to load persisted chain
+      if (storage_->hasPersistedChain())
+      {
+        std::cout << "[Blockchain] Loading chain from disk..." << std::endl;
+        auto loadedChain = storage_->loadChain();
+
+        if (!loadedChain.empty() && isChainValid(loadedChain))
+        {
+          chain_ = std::move(loadedChain);
+          stateManager_.rebuildState(chain_);
+          std::cout << "[Blockchain] Loaded " << chain_.size()
+                    << " blocks from disk. Chain is valid." << std::endl;
+          return; // Skip genesis creation
+        }
+        else
+        {
+          std::cerr << "[Blockchain] Persisted chain is invalid or empty. "
+                    << "Creating fresh chain." << std::endl;
+        }
+      }
+    }
+
+    // ─── Create genesis block ─────────────────────────────────────
     std::cout << "[Blockchain] Mining genesis block..." << std::endl;
 
     Block genesis = Block::createGenesis(difficulty);
@@ -19,6 +60,13 @@ namespace blockchain
 
     std::cout << "[Blockchain] Genesis block created: " << genesis.hash
               << std::endl;
+
+    // Persist genesis block
+    if (storage_)
+    {
+      storage_->saveChain(chain_);
+      storage_->saveState(stateManager_);
+    }
   }
 
   bool Blockchain::addTransaction(const Transaction &tx)
@@ -80,6 +128,18 @@ namespace blockchain
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // ─── Dynamic difficulty retargeting ───────────────────────────
+    if (consensusEngine_)
+    {
+      uint32_t newDiff = consensusEngine_->nextDifficulty(chain_, difficulty_);
+      if (newDiff > 0 && newDiff != difficulty_)
+      {
+        std::cout << "[Blockchain] Difficulty retarget: " << difficulty_
+                  << " -> " << newDiff << std::endl;
+        difficulty_ = newDiff;
+      }
+    }
+
     // Create coinbase (mining reward) transaction
     Transaction coinbase;
     coinbase.senderPublicKey = "COINBASE";
@@ -98,9 +158,19 @@ namespace blockchain
       blockTxs.push_back(tx);
     }
 
-    // Create and mine the block
+    // Create the block
     Block newBlock(chain_.size(), chain_.back().hash, blockTxs, difficulty_);
-    newBlock.mineBlock();
+
+    // ─── Seal the block using the consensus engine ───────────────
+    if (consensusEngine_)
+    {
+      consensusEngine_->sealBlock(newBlock, minerAddress);
+    }
+    else
+    {
+      // Legacy fallback: direct mining
+      newBlock.mineBlock();
+    }
 
     // Add to chain
     chain_.push_back(newBlock);
@@ -113,6 +183,9 @@ namespace blockchain
 
     std::cout << "[Blockchain] Block #" << newBlock.index
               << " added to chain. Chain length: " << chain_.size() << std::endl;
+
+    // ─── Persist to disk ─────────────────────────────────────────
+    persistBlockLocked(newBlock);
 
     if (onBlockAdded_)
     {
@@ -168,13 +241,16 @@ namespace blockchain
         return false;
       }
 
-      // Check difficulty target
-      std::string target(current.difficulty, '0');
-      if (current.hash.substr(0, current.difficulty) != target)
+      // Check difficulty target (only for PoW blocks with difficulty > 0)
+      if (current.difficulty > 0)
       {
-        std::cerr << "[Validate] Block #" << i << " doesn't meet difficulty"
-                  << std::endl;
-        return false;
+        std::string target(current.difficulty, '0');
+        if (current.hash.substr(0, current.difficulty) != target)
+        {
+          std::cerr << "[Validate] Block #" << i << " doesn't meet difficulty"
+                    << std::endl;
+          return false;
+        }
       }
 
       // Validate all transactions
@@ -193,7 +269,19 @@ namespace blockchain
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (newChain.size() <= chain_.size())
+    // ─── Use consensus engine to decide chain acceptance ─────────
+    bool shouldAccept = false;
+    if (consensusEngine_)
+    {
+      shouldAccept = consensusEngine_->shouldAcceptChain(chain_, newChain);
+    }
+    else
+    {
+      // Legacy: longest chain wins
+      shouldAccept = newChain.size() > chain_.size();
+    }
+
+    if (!shouldAccept)
     {
       std::cout
           << "[Consensus] Received chain is not longer. Keeping current chain."
@@ -225,6 +313,9 @@ namespace blockchain
                                   }),
                    mempool_.end());
 
+    // ─── Persist the new chain ───────────────────────────────────
+    persistChainLocked();
+
     return true;
   }
 
@@ -252,6 +343,13 @@ namespace blockchain
     return chain_.size();
   }
 
+  std::string Blockchain::getConsensusName() const
+  {
+    if (consensusEngine_)
+      return consensusEngine_->name();
+    return "Legacy (built-in PoW)";
+  }
+
   nlohmann::json Blockchain::chainToJson() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -276,6 +374,7 @@ namespace blockchain
     {
       chain_ = newChain;
       stateManager_.rebuildState(chain_);
+      persistChainLocked();
     }
   }
 
@@ -290,6 +389,12 @@ namespace blockchain
     onTransactionAdded_ = std::move(callback);
   }
 
+  void Blockchain::persistChain()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    persistChainLocked();
+  }
+
   bool Blockchain::isInMempool(const std::string &txID) const
   {
     for (const auto &tx : mempool_)
@@ -298,6 +403,26 @@ namespace blockchain
         return true;
     }
     return false;
+  }
+
+  // ─── Private persistence helpers ──────────────────────────────
+
+  void Blockchain::persistChainLocked()
+  {
+    if (storage_)
+    {
+      storage_->saveChain(chain_);
+      storage_->saveState(stateManager_);
+    }
+  }
+
+  void Blockchain::persistBlockLocked(const Block &block)
+  {
+    if (storage_)
+    {
+      storage_->appendBlock(block);
+      storage_->saveState(stateManager_);
+    }
   }
 
 } // namespace blockchain
