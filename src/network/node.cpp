@@ -1,4 +1,4 @@
-#include "network/node.h"
+﻿#include "network/node.h"
 #include <iostream>
 
 namespace blockchain
@@ -209,35 +209,8 @@ namespace blockchain
                 std::lock_guard<std::mutex> lock(peersMutex_);
                 peers_.push_back(peer);
               }
-<<<<<<< Updated upstream
 
               peer->start();
-=======
-              else
-              {
-                // BUG-9: Check MAX_PEERS for inbound connections too
-                std::lock_guard<std::mutex> lock(peersMutex_);
-                if (peers_.size() >= MAX_PEERS)
-                {
-                  std::cout << "[Node] Max peers reached. Rejecting inbound from "
-                            << peerKey << std::endl;
-                  boost::system::error_code shutdownEc;
-                  socket.shutdown(tcp::socket::shutdown_both, shutdownEc);
-                }
-                else
-                {
-                  auto peer = std::make_shared<Peer>(
-                      std::move(socket),
-                      [this](std::shared_ptr<Peer> p, const Message &msg)
-                      {
-                        handleMessage(p, msg);
-                      });
-
-                  peers_.push_back(peer);
-                  peer->start();
-                }
-              }
->>>>>>> Stashed changes
             }
 
             doAccept(); // Continue accepting

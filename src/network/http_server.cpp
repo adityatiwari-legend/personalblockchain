@@ -1,4 +1,4 @@
-#include "network/http_server.h"
+﻿#include "network/http_server.h"
 #include "utils/json.hpp"
 
 #include <algorithm>
@@ -445,18 +445,9 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleGetChain()
     {
-<<<<<<< Updated upstream
       nlohmann::json j;
       j["length"] = blockchain_.getChainLength();
       j["chain"] = blockchain_.chainToJson();
-=======
-      try
-      {
-        nlohmann::json j;
-        j["name"] = blockchain_.getName();
-        j["length"] = blockchain_.getChainLength();
-        j["chain"] = blockchain_.chainToJson();
->>>>>>> Stashed changes
 
         HttpResponse resp;
         resp.body = j.dump(2);
@@ -526,26 +517,12 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleHealth()
     {
-<<<<<<< Updated upstream
       nlohmann::json j;
       j["status"] = "ok";
       j["chainLength"] = blockchain_.getChainLength();
       j["difficulty"] = blockchain_.getDifficulty();
       j["peerCount"] = node_.getPeerList().size();
       j["mempoolSize"] = blockchain_.getMempool().size();
-=======
-      try
-      {
-        nlohmann::json j;
-        j["status"] = "ok";
-        j["version"] = "2.0.0";
-        j["name"] = blockchain_.getName();
-        j["chainLength"] = blockchain_.getChainLength();
-        j["difficulty"] = blockchain_.getDifficulty();
-        j["consensus"] = blockchain_.getConsensusName();
-        j["peerCount"] = node_.getPeerList().size();
-        j["mempoolSize"] = blockchain_.getMempool().size();
->>>>>>> Stashed changes
 
         HttpResponse resp;
         resp.body = j.dump(2);
@@ -561,46 +538,5 @@ namespace blockchain
       }
     }
 
-<<<<<<< Updated upstream
-=======
-    HttpServer::HttpResponse HttpServer::handleGetPeerScores()
-    {
-      try
-      {
-        const auto &scorer = node_.getPeerScorer();
-        auto allPeers = scorer.getAllPeers();
-
-        nlohmann::json peers = nlohmann::json::array();
-        for (const auto &[key, info] : allPeers)
-        {
-          nlohmann::json p;
-          p["endpoint"] = key;
-          p["host"] = info.host;
-          p["port"] = info.port;
-          p["score"] = info.score;
-          p["banned"] = info.banned;
-          p["invalidBlocks"] = info.invalidBlockCount;
-          peers.push_back(p);
-        }
-
-        nlohmann::json j;
-        j["count"] = allPeers.size();
-        j["peers"] = peers;
-
-        HttpResponse resp;
-        resp.body = j.dump(2);
-        return resp;
-      }
-      catch (const std::exception &e)
-      {
-        HttpResponse resp;
-        resp.statusCode = 500;
-        resp.statusText = "Internal Server Error";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
-      }
-    }
-
->>>>>>> Stashed changes
   } // namespace network
 } // namespace blockchain

@@ -35,9 +35,9 @@ A production-hardened, modular private blockchain network built from scratch in 
 │  Block   │  Transaction  │       Wallet        │
 │ (Merkle, │ (Sign, Verify,│  (Key Pairs,        │
 │  PoW)    │  Replay Guard)│   Signing)          │
-├──────────┴───────────┴──────────────────────────┤
-│              Consensus Engine                   │
-│   IConsensusEngine → PoWEngine + DifficultyAdjuster │
+├──────────┴───────────┴─────────────────────────┤
+│              Consensus Engine                  │
+│ IConsensusEngine → PoWEngine + DifficultyAdjuster │
 ├─────────────────────────────────────────────────┤
 │                 Crypto Layer                    │
 │          (SHA-256, ECDSA secp256k1)             │
