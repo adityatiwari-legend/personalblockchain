@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// node1 HTTP API is mapped to host port 8001 by docker-compose (8001:8000)
-const API_BASE_URL = 'http://localhost:8001';
+// node1 HTTP API — set VITE_API_BASE_URL in .env before building
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
