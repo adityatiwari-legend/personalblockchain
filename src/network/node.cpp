@@ -80,6 +80,9 @@ namespace blockchain
                         handleMessage(p, msg);
                       });
 
+                  // BUG-8: Set known listen port for correct peer identity
+                  peer->setListenPort(port);
+
                   {
                     std::lock_guard<std::mutex> lock(peersMutex_);
                     peers_.push_back(peer);
@@ -206,8 +209,35 @@ namespace blockchain
                 std::lock_guard<std::mutex> lock(peersMutex_);
                 peers_.push_back(peer);
               }
+<<<<<<< Updated upstream
 
               peer->start();
+=======
+              else
+              {
+                // BUG-9: Check MAX_PEERS for inbound connections too
+                std::lock_guard<std::mutex> lock(peersMutex_);
+                if (peers_.size() >= MAX_PEERS)
+                {
+                  std::cout << "[Node] Max peers reached. Rejecting inbound from "
+                            << peerKey << std::endl;
+                  boost::system::error_code shutdownEc;
+                  socket.shutdown(tcp::socket::shutdown_both, shutdownEc);
+                }
+                else
+                {
+                  auto peer = std::make_shared<Peer>(
+                      std::move(socket),
+                      [this](std::shared_ptr<Peer> p, const Message &msg)
+                      {
+                        handleMessage(p, msg);
+                      });
+
+                  peers_.push_back(peer);
+                  peer->start();
+                }
+              }
+>>>>>>> Stashed changes
             }
 
             doAccept(); // Continue accepting
@@ -238,6 +268,11 @@ namespace blockchain
             if (!alreadySeen)
             {
               seenTxIDs_.insert(tx.txID);
+              // Enforce eviction limit on all insertion paths
+              if (seenTxIDs_.size() > 10000)
+              {
+                seenTxIDs_.erase(seenTxIDs_.begin());
+              }
             }
           }
 
@@ -271,6 +306,10 @@ namespace blockchain
             if (!alreadySeen)
             {
               seenBlockHashes_.insert(block.hash);
+              if (seenBlockHashes_.size() > 1000)
+              {
+                seenBlockHashes_.erase(seenBlockHashes_.begin());
+              }
             }
           }
 

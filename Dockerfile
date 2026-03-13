@@ -36,6 +36,9 @@ WORKDIR /app
 
 COPY --from=builder /app/build/blockchain_node .
 
+# Create persistent data directory
+RUN mkdir -p /app/data
+
 EXPOSE 5000 8000
 
 ENTRYPOINT ["./blockchain_node"]

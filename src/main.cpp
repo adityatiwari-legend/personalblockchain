@@ -29,12 +29,19 @@
 #include <vector>
 
 static std::atomic<bool> running{true};
+static std::atomic<bool> shutdownRequested{false};
 static boost::asio::io_context *g_ioContext = nullptr;
 
 void signalHandler(int /*signal*/)
 {
-  std::cout << "\n[Main] Shutting down..." << std::endl;
+  // Signal handlers must only touch atomics — never acquire mutexes.
+  // Persistence will be done from the main thread after io_context stops.
+  shutdownRequested.store(true);
   running = false;
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
   if (g_ioContext)
   {
     g_ioContext->stop();
@@ -154,8 +161,36 @@ int main(int argc, char *argv[])
 
   try
   {
+<<<<<<< Updated upstream
     // Initialize blockchain
     blockchain::Blockchain chain(config.difficulty);
+=======
+    // ─── Build the consensus engine ────────────────────────────────
+    std::shared_ptr<blockchain::consensus::IConsensusEngine> engine;
+
+    if (config.consensus == "pow")
+    {
+      blockchain::DifficultyAdjuster adjuster(
+          config.targetBlockTime,
+          config.retargetWindow,
+          config.maxAdjustFactor,
+          1, // minDifficulty
+          8  // maxDifficulty
+      );
+      engine = std::make_shared<blockchain::consensus::PoWEngine>(std::move(adjuster));
+
+      std::cout << "[Main] PoW engine initialized with dynamic difficulty retargeting.\n";
+    }
+    else
+    {
+      std::cerr << "[Main] Unknown consensus engine: " << config.consensus
+                << ". Falling back to legacy mode." << std::endl;
+    }
+
+    // ─── Initialize blockchain (with persistence + consensus) ─────
+    blockchain::Blockchain chain(config.difficulty, config.name,
+                                 engine, config.dataDir);
+>>>>>>> Stashed changes
 
     // Initialize Boost ASIO
     boost::asio::io_context ioContext;
@@ -210,6 +245,18 @@ int main(int argc, char *argv[])
       if (t.joinable())
         t.join();
     }
+<<<<<<< Updated upstream
+=======
+
+    // Persist from main thread after io_context has stopped (safe — no contention)
+    std::cout << "\n[Main] Shutting down..." << std::endl;
+    if (shutdownRequested.load())
+    {
+      std::cout << "[Main] Persisting chain to disk..." << std::endl;
+    }
+    std::cout << "[Main] Final chain persist..." << std::endl;
+    chain.persistChain();
+>>>>>>> Stashed changes
   }
   catch (const std::exception &e)
   {
