@@ -1,4 +1,4 @@
-﻿#include "network/http_server.h"
+#include "network/http_server.h"
 #include "utils/json.hpp"
 
 #include <algorithm>

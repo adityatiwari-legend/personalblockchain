@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PersonalBlockchain Node â€” Main Entry Point
  *
  * Usage:

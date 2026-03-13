@@ -1,4 +1,4 @@
-﻿#include "core/blockchain.h"
+#include "core/blockchain.h"
 #include <algorithm>
 #include <iostream>
 
@@ -123,35 +123,18 @@ namespace blockchain
   bool Blockchain::isChainValid() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    return isChainValidImpl(chain_);
+    return isChainValid(chain_);
   }
 
-  bool Blockchain::isChainValid(const std::vector<Block> &chain) const
-  {
-    return isChainValidImpl(chain);
-  }
-
-  // Static version for contexts without a consensus engine (e.g., storage layer)
-  bool Blockchain::isChainValidBasic(const std::vector<Block> &chain)
+  bool Blockchain::isChainValid(const std::vector<Block> &chain)
   {
     if (chain.empty())
       return false;
 
-    // Validate genesis block fully
-    const Block &genesis = chain[0];
-    if (genesis.previousHash != std::string(64, '0'))
+    // Validate genesis block
+    if (chain[0].previousHash != std::string(64, '0'))
     {
       std::cerr << "[Validate] Invalid genesis previousHash" << std::endl;
-      return false;
-    }
-    if (genesis.hash != genesis.calculateHash())
-    {
-      std::cerr << "[Validate] Genesis block hash mismatch" << std::endl;
-      return false;
-    }
-    if (genesis.merkleRoot != genesis.computeMerkleRoot())
-    {
-      std::cerr << "[Validate] Genesis block invalid Merkle root" << std::endl;
       return false;
     }
 
@@ -170,14 +153,16 @@ namespace blockchain
       // Check previous hash link
       if (current.previousHash != previous.hash)
       {
-        std::cerr << "[Validate] Block #" << i << " invalid previousHash" << std::endl;
+        std::cerr << "[Validate] Block #" << i << " invalid previousHash"
+                  << std::endl;
         return false;
       }
 
       // Check Merkle root
       if (current.merkleRoot != current.computeMerkleRoot())
       {
-        std::cerr << "[Validate] Block #" << i << " invalid Merkle root" << std::endl;
+        std::cerr << "[Validate] Block #" << i << " invalid Merkle root"
+                  << std::endl;
         return false;
       }
 
@@ -190,79 +175,12 @@ namespace blockchain
         return false;
       }
 
-      // BUG-5 fix: validate difficulty target is met (no longer optional)
-      if (current.difficulty > 64)
-      {
-        std::cerr << "[Validate] Block #" << i << " has unreasonable difficulty ("
-                  << current.difficulty << ")" << std::endl;
-        return false;
-      }
-      std::string target(current.difficulty, '0');
-      if (current.hash.substr(0, current.difficulty) != target)
-      {
-        std::cerr << "[Validate] Block #" << i << " doesn't meet difficulty" << std::endl;
-        return false;
-      }
-
-      // Check block index continuity
-      if (current.index != i)
-      {
-        std::cerr << "[Validate] Block #" << i << " has wrong index ("
-                  << current.index << ")" << std::endl;
-        return false;
-      }
-
-      // Validate all transactions + coinbase count
+      // Validate all transactions
       if (!current.hasValidTransactions())
       {
-        std::cerr << "[Validate] Block #" << i << " has invalid transactions" << std::endl;
+        std::cerr << "[Validate] Block #" << i << " has invalid transactions"
+                  << std::endl;
         return false;
-      }
-
-      // Validate exactly one coinbase transaction (must be first)
-      size_t coinbaseCount = 0;
-      for (size_t t = 0; t < current.transactions.size(); t++)
-      {
-        if (current.transactions[t].isCoinbase())
-        {
-          coinbaseCount++;
-          if (t != 0)
-          {
-            std::cerr << "[Validate] Block #" << i
-                      << " has coinbase transaction at position " << t
-                      << " (must be first)" << std::endl;
-            return false;
-          }
-        }
-      }
-      if (coinbaseCount != 1)
-      {
-        std::cerr << "[Validate] Block #" << i << " has " << coinbaseCount
-                  << " coinbase transactions (expected 1)" << std::endl;
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  bool Blockchain::isChainValidImpl(const std::vector<Block> &chain) const
-  {
-    // First run the basic structural checks
-    if (!isChainValidBasic(chain))
-      return false;
-
-    // BUG-6: If we have a consensus engine, also validate each block through it
-    if (consensusEngine_ && chain.size() > 1)
-    {
-      for (size_t i = 1; i < chain.size(); i++)
-      {
-        if (!consensusEngine_->validateBlock(chain[i], chain[i - 1]))
-        {
-          std::cerr << "[Validate] Block #" << i
-                    << " failed consensus engine validation" << std::endl;
-          return false;
-        }
       }
     }
 
@@ -281,7 +199,7 @@ namespace blockchain
       return false;
     }
 
-    if (!isChainValidImpl(newChain))
+    if (!isChainValid(newChain))
     {
       std::cerr << "[Consensus] Received chain is invalid. Rejecting."
                 << std::endl;
@@ -352,18 +270,7 @@ namespace blockchain
       newChain.push_back(Block::fromJson(blockJson));
     }
 
-    // Use consensus engine for chain acceptance if available
-    bool shouldAccept = false;
-    if (consensusEngine_)
-    {
-      shouldAccept = consensusEngine_->shouldAcceptChain(chain_, newChain);
-    }
-    else
-    {
-      shouldAccept = newChain.size() > chain_.size();
-    }
-
-    if (shouldAccept && isChainValidImpl(newChain))
+    if (isChainValid(newChain) && newChain.size() > chain_.size())
     {
       chain_ = newChain;
       stateManager_.rebuildState(chain_);
@@ -372,14 +279,12 @@ namespace blockchain
 
   void Blockchain::setOnBlockAdded(std::function<void(const Block &)> callback)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
     onBlockAdded_ = std::move(callback);
   }
 
   void Blockchain::setOnTransactionAdded(
       std::function<void(const Transaction &)> callback)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
     onTransactionAdded_ = std::move(callback);
   }
 

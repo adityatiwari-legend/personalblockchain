@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "block/block.h"
 #include "state/state_manager.h"

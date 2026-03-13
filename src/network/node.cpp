@@ -1,4 +1,4 @@
-﻿#include "network/node.h"
+#include "network/node.h"
 #include <iostream>
 
 namespace blockchain
