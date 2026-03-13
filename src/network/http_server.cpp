@@ -445,9 +445,11 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleGetChain()
     {
-      nlohmann::json j;
-      j["length"] = blockchain_.getChainLength();
-      j["chain"] = blockchain_.chainToJson();
+      try
+      {
+        nlohmann::json j;
+        j["length"] = blockchain_.getChainLength();
+        j["chain"] = blockchain_.chainToJson();
 
         HttpResponse resp;
         resp.body = j.dump(2);
@@ -517,12 +519,14 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleHealth()
     {
-      nlohmann::json j;
-      j["status"] = "ok";
-      j["chainLength"] = blockchain_.getChainLength();
-      j["difficulty"] = blockchain_.getDifficulty();
-      j["peerCount"] = node_.getPeerList().size();
-      j["mempoolSize"] = blockchain_.getMempool().size();
+      try
+      {
+        nlohmann::json j;
+        j["status"] = "ok";
+        j["chainLength"] = blockchain_.getChainLength();
+        j["difficulty"] = blockchain_.getDifficulty();
+        j["peerCount"] = node_.getPeerList().size();
+        j["mempoolSize"] = blockchain_.getMempool().size();
 
         HttpResponse resp;
         resp.body = j.dump(2);
