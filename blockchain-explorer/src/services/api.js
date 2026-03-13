@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 
 // node1 HTTP API is mapped to host port 8001 by docker-compose (8001:8000)
 const API_BASE_URL = 'http://localhost:8001';
@@ -10,60 +10,46 @@ const api = axios.create({
 
 export const blockchainApi = {
   getChain: async () => {
-    try {
-      const response = await api.get('/chain');
-      if (response.data && Array.isArray(response.data.chain)) {
-        return response.data.chain;
-      }
-      if (Array.isArray(response.data)) {
-        return response.data;
-      }
-      return [];
-    } catch (error) {
-      throw error;
+    const response = await api.get('/chain');
+    if (response.data && Array.isArray(response.data.chain)) {
+      return response.data.chain;
     }
-  },
-  
-  getPeers: async () => {
-    try {
-      const response = await api.get('/peers');
-      if (response.data && Array.isArray(response.data.peers)) return response.data.peers;
-      if (Array.isArray(response.data)) return response.data;
-      return [];
-    } catch (error) {
-      throw error;
-    }
-  },
-  
-  addTransaction: async (sender, receiver, amount) => {
-    try {
-      const response = await api.post('/addTransaction', { sender, receiver, amount: Number(amount) });
+    if (Array.isArray(response.data)) {
       return response.data;
-    } catch (error) {
-      try {
-        const fallbackRes = await api.post('/transaction/send', { sender, receiver, amount: Number(amount) });
-        return fallbackRes.data;
-      } catch (e2) {
-        throw e2;
-      }
     }
+    return [];
   },
 
-  mineBlock: async () => {
-    try {
-      const response = await api.post('/mine');
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+  getPeers: async () => {
+    const response = await api.get('/peers');
+    if (response.data && Array.isArray(response.data.peers)) return response.data.peers;
+    if (Array.isArray(response.data)) return response.data;
+    return [];
+  },
+
+  addTransaction: async (senderPrivateKey, senderPublicKey, receiverPublicKey, payload) => {
+    const response = await api.post('/transaction/send', {
+      senderPrivateKey,
+      senderPublicKey,
+      receiverPublicKey,
+      payload: String(payload)
+    });
+    return response.data;
+  },
+
+  mineBlock: async (minerAddress) => {
+    const body = minerAddress ? { minerAddress } : {};
+    const response = await api.post('/mine', body);
+    return response.data;
+  },
+
+  createWallet: async () => {
+    const response = await api.post('/wallet/create');
+    return response.data;
   },
 
   getHealth: async () => {
-    try {
-      const response = await api.get('/health');
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+    const response = await api.get('/health');
+    return response.data;
   }
 };

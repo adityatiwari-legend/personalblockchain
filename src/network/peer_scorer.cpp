@@ -36,6 +36,15 @@ namespace blockchain
                 // Cap score at 200 to prevent infinite accumulation
                 if (it->second.score > 200)
                     it->second.score = 200;
+
+                // Allow unbanning if score has recovered above threshold
+                if (it->second.banned && it->second.score > BAN_THRESHOLD + 20)
+                {
+                    it->second.banned = false;
+                    it->second.invalidBlockCount = 0;
+                    std::cout << "[PeerScore] Unbanned peer " << key
+                              << " (score recovered to " << it->second.score << ")" << std::endl;
+                }
             }
         }
 
@@ -48,13 +57,13 @@ namespace blockchain
 
             it->second.score += penalty; // penalty is negative
 
-            // Track repeated bad blocks
+            // Track repeated bad blocks (reset count periodically via eviction)
             if (penalty == PENALTY_INVALID_BLOCK)
             {
                 it->second.invalidBlockCount++;
-                if (it->second.invalidBlockCount >= 3)
+                // Only apply rapid misbehavior on the exact threshold crossing
+                if (it->second.invalidBlockCount == 3)
                 {
-                    // Rapid misbehavior: extra penalty
                     it->second.score += PENALTY_RAPID_MISBEHAVIOR;
                 }
             }

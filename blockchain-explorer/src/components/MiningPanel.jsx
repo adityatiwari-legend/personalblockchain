@@ -16,7 +16,8 @@ export default function MiningPanel({ onSuccess, minimal }) {
       toast.success('Block Mined Successfully!');
       if (onSuccess) onSuccess();
     } catch (err) {
-      toast.error('Mining failed');
+      const msg = err.response?.data?.error || err.response?.data?.message || 'Mining failed';
+      toast.error(msg);
     } finally {
       setIsMining(false);
     }

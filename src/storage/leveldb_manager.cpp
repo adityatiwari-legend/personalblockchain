@@ -185,7 +185,7 @@ namespace blockchain
 
         bool LevelDBManager::validateChainIntegrity(const std::vector<Block> &chain)
         {
-            return Blockchain::isChainValid(chain);
+            return Blockchain::isChainValidBasic(chain);
         }
 
         bool LevelDBManager::hasPersistedChain() const

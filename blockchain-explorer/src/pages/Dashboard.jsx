@@ -18,20 +18,15 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchData = async () => {
-    try {
-      const [chainData, peersData, healthData] = await Promise.all([
-        blockchainApi.getChain(),
-        blockchainApi.getPeers(),
-        blockchainApi.getHealth()
-      ]);
-      setChain(chainData || []);
-      setPeers(peersData || []);
-      if (healthData?.name) setChainName(healthData.name);
-    } catch (error) {
-      console.error('Failed to sync node:', error);
-    } finally {
-      setIsLoading(false);
-    }
+    const [chainResult, peersResult, healthResult] = await Promise.allSettled([
+      blockchainApi.getChain(),
+      blockchainApi.getPeers(),
+      blockchainApi.getHealth()
+    ]);
+    if (chainResult.status === 'fulfilled') setChain(chainResult.value || []);
+    if (peersResult.status === 'fulfilled') setPeers(peersResult.value || []);
+    if (healthResult.status === 'fulfilled' && healthResult.value?.name) setChainName(healthResult.value.name);
+    setIsLoading(false);
   };
 
   useEffect(() => {

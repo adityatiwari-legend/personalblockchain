@@ -39,6 +39,14 @@ namespace blockchain
             bool validateBlock(const Block &block,
                                const Block &previousBlock) const override
             {
+                // 0. Reject invalid difficulty values
+                if (block.difficulty < 1 || block.difficulty > 64)
+                {
+                    std::cerr << "[PoW] Block #" << block.index
+                              << " has invalid difficulty: " << block.difficulty << std::endl;
+                    return false;
+                }
+
                 // 1. Verify hash integrity
                 if (block.hash != block.calculateHash())
                 {

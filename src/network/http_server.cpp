@@ -83,7 +83,48 @@ namespace blockchain
             auto clIt = req.headers.find("content-length");
             if (clIt != req.headers.end())
             {
-              size_t contentLen = std::stoul(clIt->second);
+              size_t contentLen = 0;
+              try
+              {
+                contentLen = std::stoul(clIt->second);
+              }
+              catch (...)
+              {
+                // Malformed Content-Length
+                HttpResponse resp;
+                resp.statusCode = 400;
+                resp.statusText = "Bad Request";
+                resp.body = R"({"error": "Invalid Content-Length header"})";
+                auto data = std::make_shared<std::string>(resp.serialize());
+                boost::asio::async_write(
+                    *socket, boost::asio::buffer(*data),
+                    [socket, data](boost::system::error_code, std::size_t)
+                    {
+                      boost::system::error_code shutdownEc;
+                      socket->shutdown(tcp::socket::shutdown_both, shutdownEc);
+                    });
+                return;
+              }
+
+              // Reject bodies larger than 1 MB to prevent OOM
+              static constexpr size_t MAX_BODY_SIZE = 1 * 1024 * 1024;
+              if (contentLen > MAX_BODY_SIZE)
+              {
+                HttpResponse resp;
+                resp.statusCode = 413;
+                resp.statusText = "Payload Too Large";
+                resp.body = "{\"error\": \"Request body too large (max 1MB)\"}";
+                auto data = std::make_shared<std::string>(resp.serialize());
+                boost::asio::async_write(
+                    *socket, boost::asio::buffer(*data),
+                    [socket, data](boost::system::error_code, std::size_t)
+                    {
+                      boost::system::error_code shutdownEc;
+                      socket->shutdown(tcp::socket::shutdown_both, shutdownEc);
+                    });
+                return;
+              }
+
               size_t alreadyRead = extraBody.size();
               size_t remaining =
                   (contentLen > alreadyRead) ? (contentLen - alreadyRead) : 0;
@@ -104,12 +145,12 @@ namespace blockchain
                       }
 
                       HttpResponse resp = handleRequest(req);
-                      std::string data = resp.serialize();
+                      auto data = std::make_shared<std::string>(resp.serialize());
 
                       boost::asio::async_write(
-                          *socket, boost::asio::buffer(data),
-                          [socket](boost::system::error_code /*ec*/,
-                                   std::size_t /*bytes*/)
+                          *socket, boost::asio::buffer(*data),
+                          [socket, data](boost::system::error_code /*ec*/,
+                                         std::size_t /*bytes*/)
                           {
                             boost::system::error_code shutdownEc;
                             socket->shutdown(tcp::socket::shutdown_both, shutdownEc);
@@ -125,11 +166,11 @@ namespace blockchain
             }
 
             HttpResponse resp = handleRequest(req);
-            std::string data = resp.serialize();
+            auto data = std::make_shared<std::string>(resp.serialize());
 
             boost::asio::async_write(
-                *socket, boost::asio::buffer(data),
-                [socket](boost::system::error_code /*ec*/, std::size_t /*bytes*/)
+                *socket, boost::asio::buffer(*data),
+                [socket, data](boost::system::error_code /*ec*/, std::size_t /*bytes*/)
                 {
                   boost::system::error_code shutdownEc;
                   socket->shutdown(tcp::socket::shutdown_both, shutdownEc);
@@ -225,10 +266,6 @@ namespace blockchain
       if (req.method == "GET" && req.path == "/peers")
       {
         return handleGetPeers();
-      }
-      if (req.method == "GET" && req.path == "/peers/scores")
-      {
-        return handleGetPeerScores();
       }
       if (req.method == "GET" && req.path == "/health")
       {
@@ -408,89 +445,162 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleGetChain()
     {
+<<<<<<< Updated upstream
       nlohmann::json j;
-      j["name"] = blockchain_.getName();
       j["length"] = blockchain_.getChainLength();
       j["chain"] = blockchain_.chainToJson();
+=======
+      try
+      {
+        nlohmann::json j;
+        j["name"] = blockchain_.getName();
+        j["length"] = blockchain_.getChainLength();
+        j["chain"] = blockchain_.chainToJson();
+>>>>>>> Stashed changes
 
-      HttpResponse resp;
-      resp.body = j.dump(2);
-      return resp;
+        HttpResponse resp;
+        resp.body = j.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
     }
 
     HttpServer::HttpResponse HttpServer::handleGetMempool()
     {
-      auto txs = blockchain_.getMempool();
-      nlohmann::json j = nlohmann::json::array();
-      for (const auto &tx : txs)
+      try
       {
-        j.push_back(tx.toJson());
+        auto txs = blockchain_.getMempool();
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto &tx : txs)
+        {
+          j.push_back(tx.toJson());
+        }
+
+        nlohmann::json out;
+        out["count"] = txs.size();
+        out["transactions"] = j;
+
+        HttpResponse resp;
+        resp.body = out.dump(2);
+        return resp;
       }
-
-      nlohmann::json out;
-      out["count"] = txs.size();
-      out["transactions"] = j;
-
-      HttpResponse resp;
-      resp.body = out.dump(2);
-      return resp;
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
     }
 
     HttpServer::HttpResponse HttpServer::handleGetPeers()
     {
-      auto peers = node_.getPeerList();
-      nlohmann::json j;
-      j["count"] = peers.size();
-      j["peers"] = peers;
+      try
+      {
+        auto peers = node_.getPeerList();
+        nlohmann::json j;
+        j["count"] = peers.size();
+        j["peers"] = peers;
 
-      HttpResponse resp;
-      resp.body = j.dump(2);
-      return resp;
+        HttpResponse resp;
+        resp.body = j.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
     }
 
     HttpServer::HttpResponse HttpServer::handleHealth()
     {
+<<<<<<< Updated upstream
       nlohmann::json j;
       j["status"] = "ok";
-      j["version"] = "2.0.0";
-      j["name"] = blockchain_.getName();
       j["chainLength"] = blockchain_.getChainLength();
       j["difficulty"] = blockchain_.getDifficulty();
-      j["consensus"] = blockchain_.getConsensusName();
       j["peerCount"] = node_.getPeerList().size();
       j["mempoolSize"] = blockchain_.getMempool().size();
+=======
+      try
+      {
+        nlohmann::json j;
+        j["status"] = "ok";
+        j["version"] = "2.0.0";
+        j["name"] = blockchain_.getName();
+        j["chainLength"] = blockchain_.getChainLength();
+        j["difficulty"] = blockchain_.getDifficulty();
+        j["consensus"] = blockchain_.getConsensusName();
+        j["peerCount"] = node_.getPeerList().size();
+        j["mempoolSize"] = blockchain_.getMempool().size();
+>>>>>>> Stashed changes
 
-      HttpResponse resp;
-      resp.body = j.dump(2);
-      return resp;
+        HttpResponse resp;
+        resp.body = j.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
     }
 
+<<<<<<< Updated upstream
+=======
     HttpServer::HttpResponse HttpServer::handleGetPeerScores()
     {
-      const auto &scorer = node_.getPeerScorer();
-      auto allPeers = scorer.getAllPeers();
-
-      nlohmann::json peers = nlohmann::json::array();
-      for (const auto &[key, info] : allPeers)
+      try
       {
-        nlohmann::json p;
-        p["endpoint"] = key;
-        p["host"] = info.host;
-        p["port"] = info.port;
-        p["score"] = info.score;
-        p["banned"] = info.banned;
-        p["invalidBlocks"] = info.invalidBlockCount;
-        peers.push_back(p);
+        const auto &scorer = node_.getPeerScorer();
+        auto allPeers = scorer.getAllPeers();
+
+        nlohmann::json peers = nlohmann::json::array();
+        for (const auto &[key, info] : allPeers)
+        {
+          nlohmann::json p;
+          p["endpoint"] = key;
+          p["host"] = info.host;
+          p["port"] = info.port;
+          p["score"] = info.score;
+          p["banned"] = info.banned;
+          p["invalidBlocks"] = info.invalidBlockCount;
+          peers.push_back(p);
+        }
+
+        nlohmann::json j;
+        j["count"] = allPeers.size();
+        j["peers"] = peers;
+
+        HttpResponse resp;
+        resp.body = j.dump(2);
+        return resp;
       }
-
-      nlohmann::json j;
-      j["count"] = allPeers.size();
-      j["peers"] = peers;
-
-      HttpResponse resp;
-      resp.body = j.dump(2);
-      return resp;
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
     }
 
+>>>>>>> Stashed changes
   } // namespace network
 } // namespace blockchain
