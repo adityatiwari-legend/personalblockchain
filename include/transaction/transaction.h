@@ -4,52 +4,53 @@
 #include <cstdint>
 #include <string>
 
-
-namespace blockchain {
-
-/**
- * Represents a single transaction on the blockchain.
- * Each transaction is signed by the sender using ECDSA.
- */
-struct Transaction {
-  std::string txID; // SHA-256(core tx fields)
-  std::string senderPublicKey;   // Compressed hex public key of sender
-  std::string receiverPublicKey; // Optional receiver public key
-  std::string fromAddress;       // SHA256(senderPublicKey)
-  std::string toAddress;         // Recipient wallet address
-  uint64_t amount = 0;           // Transfer amount in smallest unit
-  uint64_t nonce = 0;            // Monotonic sender nonce (replay protection)
-  std::string payload;           // Generic payload (JSON string or plaintext)
-  std::string timestamp;         // ISO 8601 format
-  std::string digitalSignature;  // Hex-encoded ECDSA signature of txID
-
-  /** Compute the transaction ID from fields. */
-  void computeTxID();
-
-  /** Sign the transaction with the sender's private key. */
-  void sign(const std::string &privateKey);
-
-  /** Verify the digital signature against the sender's public key. */
-  bool verify() const;
+namespace blockchain
+{
 
   /**
-   * Check if transaction has expired (replay prevention).
-   * @param windowSeconds Maximum age in seconds (default 5 minutes)
-   * @return true if the transaction is too old
+   * Represents a single transaction on the blockchain.
+   * Each transaction is signed by the sender using ECDSA.
    */
-  bool isExpired(int64_t windowSeconds = 300) const;
+  struct Transaction
+  {
+    std::string txID;              // SHA-256(core tx fields)
+    std::string senderPublicKey;   // Compressed hex public key of sender
+    std::string receiverPublicKey; // Optional receiver public key
+    std::string fromAddress;       // SHA256(senderPublicKey)
+    std::string toAddress;         // Recipient wallet address
+    uint64_t amount = 0;           // Transfer amount in smallest unit
+    uint64_t nonce = 0;            // Monotonic sender nonce (replay protection)
+    std::string payload;           // Generic payload (JSON string or plaintext)
+    std::string timestamp;         // ISO 8601 format
+    std::string digitalSignature;  // Hex-encoded ECDSA signature of txID
 
-  /** Get current time as ISO 8601 string. */
-  static std::string currentTimestamp();
+    /** Compute the transaction ID from fields. */
+    void computeTxID();
 
-  /** Serialize to JSON object. */
-  nlohmann::json toJson() const;
+    /** Sign the transaction with the sender's private key. */
+    void sign(const std::string &privateKey);
 
-  /** Deserialize from JSON object. */
-  static Transaction fromJson(const nlohmann::json &j);
+    /** Verify the digital signature against the sender's public key. */
+    bool verify() const;
 
-  /** Check if this is a coinbase (mining reward) transaction. */
-  bool isCoinbase() const;
-};
+    /**
+     * Check if transaction has expired (replay prevention).
+     * @param windowSeconds Maximum age in seconds (default 5 minutes)
+     * @return true if the transaction is too old
+     */
+    bool isExpired(int64_t windowSeconds = 300) const;
+
+    /** Get current time as ISO 8601 string. */
+    static std::string currentTimestamp();
+
+    /** Serialize to JSON object. */
+    nlohmann::json toJson() const;
+
+    /** Deserialize from JSON object. */
+    static Transaction fromJson(const nlohmann::json &j);
+
+    /** Check if this is a coinbase (mining reward) transaction. */
+    bool isCoinbase() const;
+  };
 
 } // namespace blockchain

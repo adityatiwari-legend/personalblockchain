@@ -406,10 +406,9 @@ namespace blockchain
         const std::string address = walletManager_.addressFromPublicKey(wallet.getPublicKey());
 
         HttpResponse resp;
-        resp.body = nlohmann::json({
-            {"publicKey", wallet.getPublicKey()},
-            {"privateKey", wallet.getPrivateKey()},
-            {"address", address}})
+        resp.body = nlohmann::json({{"publicKey", wallet.getPublicKey()},
+                                    {"privateKey", wallet.getPrivateKey()},
+                                    {"address", address}})
                         .dump(2);
         return resp;
       }
@@ -441,9 +440,8 @@ namespace blockchain
 
         const std::string challenge = walletManager_.createLoginChallenge(address, publicKey);
         HttpResponse resp;
-        resp.body = nlohmann::json({
-            {"challenge", challenge},
-            {"expiresInSec", 300}})
+        resp.body = nlohmann::json({{"challenge", challenge},
+                                    {"expiresInSec", 300}})
                         .dump(2);
         return resp;
       }
@@ -487,9 +485,8 @@ namespace blockchain
         }
 
         HttpResponse resp;
-        resp.body = nlohmann::json({
-            {"address", address},
-            {"token", token.value()}})
+        resp.body = nlohmann::json({{"address", address},
+                                    {"token", token.value()}})
                         .dump(2);
         return resp;
       }
@@ -719,10 +716,9 @@ namespace blockchain
       try
       {
         HttpResponse resp;
-        resp.body = nlohmann::json({
-            {"address", address},
-            {"balance", walletManager_.getBalance(address)},
-            {"nextNonce", walletManager_.getLastNonce(address) + 1}})
+        resp.body = nlohmann::json({{"address", address},
+                                    {"balance", walletManager_.getBalance(address)},
+                                    {"nextNonce", walletManager_.getLastNonce(address) + 1}})
                         .dump(2);
         return resp;
       }
@@ -750,10 +746,9 @@ namespace blockchain
         }
 
         HttpResponse resp;
-        resp.body = nlohmann::json({
-            {"address", address},
-            {"count", txs.size()},
-            {"transactions", list}})
+        resp.body = nlohmann::json({{"address", address},
+                                    {"count", txs.size()},
+                                    {"transactions", list}})
                         .dump(2);
         return resp;
       }

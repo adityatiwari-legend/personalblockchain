@@ -1,9 +1,11 @@
 # Wallet System Upgrade - Full Stack Change Log
 
 ## Scope
+
 This upgrade transforms the project from a generic explorer into a wallet identity platform with challenge-based authentication, dynamic account balances, signed transfers, mining rewards, and a personalized React wallet dashboard.
 
 ## Architecture Design
+
 - Identity: wallet address is derived as `SHA256(publicKey)`.
 - Authentication: challenge-response signature verification (`/wallet/loginChallenge` -> `/wallet/verifyLogin`).
 - Ledger model: account-style state indexed by wallet address.
@@ -15,17 +17,21 @@ This upgrade transforms the project from a generic explorer into a wallet identi
 ## Backend Modifications
 
 ### New module
+
 - `include/wallet/wallet_manager.h`
 - `src/wallet/wallet_manager.cpp`
 
 Responsibilities:
+
 - Create/import wallets.
 - Generate and validate login challenges.
 - Verify login signatures.
 - Expose wallet balance/nonce/history from blockchain state.
 
 ### Transaction schema upgrades
+
 Updated `Transaction` with wallet-account fields:
+
 - `fromAddress`
 - `toAddress`
 - `amount`
@@ -34,7 +40,9 @@ Updated `Transaction` with wallet-account fields:
 `txID` now hashes canonical core fields including amount/nonce/addresses.
 
 ### Blockchain validation upgrades
+
 `Blockchain::addTransaction` now enforces:
+
 - Signature validity.
 - `fromAddress == SHA256(senderPublicKey)`.
 - `amount > 0`.
@@ -42,7 +50,9 @@ Updated `Transaction` with wallet-account fields:
 - Nonce replay protection (`nonce >= lastNonce + 1`).
 
 ### State updates
+
 `StateManager` now tracks:
+
 - `address -> balance`
 - `address -> lastNonce`
 - `address -> transactions[]`
@@ -50,13 +60,16 @@ Updated `Transaction` with wallet-account fields:
 Balances and histories update when blocks are applied/rebuilt.
 
 ### Mining rewards
+
 Coinbase now credits miner wallet address:
+
 - Block reward set to `50`.
 - `POST /mine?minerAddress=...` supported.
 
 ## API Changes
 
 ### New/Updated wallet endpoints
+
 - `POST /wallet/create`
   - Returns `publicKey`, `privateKey`, `address`.
 - `POST /wallet/import`
@@ -74,22 +87,26 @@ Coinbase now credits miner wallet address:
   - Returns sent/received/reward transaction history.
 
 ### Updated transfer endpoint
+
 - `POST /transaction/send`
   - Expects signed payload from frontend:
   - `fromAddress, toAddress, senderPublicKey, amount, nonce, payload, timestamp, txID, signature`.
 
 ### Mining endpoint
+
 - `POST /mine?minerAddress=ADDRESS`
 - Also accepts JSON body `{ minerAddress }`.
 
 ## Frontend Structure
 
 ### Pages added
+
 - `src/pages/Login.jsx`
 - `src/pages/WalletDashboard.jsx`
 - `src/pages/Send.jsx`
 
 ### Components added
+
 - `src/components/WalletCard.jsx`
 - `src/components/BalanceCard.jsx`
 - `src/components/TransactionTable.jsx`
@@ -97,6 +114,7 @@ Coinbase now credits miner wallet address:
 - `src/components/ReceivePanel.jsx`
 
 ### Frontend service and crypto updates
+
 - `src/services/api.js` now includes wallet auth/balance/history/send methods.
 - `src/services/walletCrypto.js` added for:
   - secp256k1 key derivation/signing in browser.
@@ -104,12 +122,14 @@ Coinbase now credits miner wallet address:
   - address derivation `SHA256(publicKey)`.
 
 ### Routing
+
 - App migrated to `react-router-dom` with guarded routes:
   - `/login`
   - `/`
   - `/send`
 
 ## Security Considerations Implemented
+
 - Challenge-response login (no password flow).
 - Private key never sent to backend.
 - Signature verification on transfer submission.
@@ -121,9 +141,11 @@ Coinbase now credits miner wallet address:
 ## Testing Plan and Added Test
 
 ### Added test target
+
 - `tests/wallet_system_tests.cpp`
 
 Covers:
+
 - Create wallet and derive address.
 - Mine reward and verify balance credit.
 - Signed transfer and balance update after mining.
@@ -131,12 +153,15 @@ Covers:
 - Replay nonce rejection.
 
 ### Build test target
+
 - `wallet_system_tests` (CMake option `BUILD_TESTS` ON by default).
 
 ## VM/Environment Changes Required
 
 ### 1) Build dependencies
+
 Install these on the VM:
+
 - CMake 3.16+
 - C++ compiler with C++17 support
 - OpenSSL dev libraries (headers + libs)
@@ -144,10 +169,13 @@ Install these on the VM:
 - Node.js 18+ and npm
 
 ### 2) OpenSSL on Windows VMs
+
 If CMake cannot find OpenSSL, set:
+
 - `OPENSSL_ROOT_DIR` to your OpenSSL install path
 
 Example PowerShell:
+
 ```powershell
 $env:OPENSSL_ROOT_DIR = "C:/Program Files/OpenSSL-Win64"
 cmake -S . -B build
@@ -155,19 +183,24 @@ cmake --build build --config Release
 ```
 
 ### 3) Frontend dependencies
+
 In `blockchain-explorer`:
+
 ```bash
 npm install
 npm run dev
 ```
 
 ### 4) API base URL
+
 Set `VITE_API_BASE_URL` if backend is not on default:
+
 ```bash
 VITE_API_BASE_URL=http://localhost:8001
 ```
 
 ## Integration Steps
+
 1. Build backend node.
 2. Start backend node with HTTP port.
 3. Start frontend Vite app.
@@ -177,5 +210,6 @@ VITE_API_BASE_URL=http://localhost:8001
 7. Confirm balance/history update on dashboard.
 
 ## Notes
+
 - Demo storage model uses browser local storage for private key; use encrypted storage or extension wallet model for production.
 - Existing chain entries without amount/address fields are still parsed with compatibility defaults.

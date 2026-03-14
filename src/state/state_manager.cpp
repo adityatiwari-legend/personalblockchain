@@ -2,57 +2,29 @@
 
 #include <algorithm>
 
-namespace blockchain {
+namespace blockchain
+{
 
-void StateManager::applyBlock(const Block &block) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  for (const auto &tx : block.transactions) {
-    if (!tx.toAddress.empty()) {
-      balances_[tx.toAddress] += tx.amount;
-      transactionsByAddress_[tx.toAddress].push_back(tx);
-    }
-
-    if (!tx.isCoinbase()) {
-      ownershipMap_[tx.senderPublicKey].insert(tx.txID);
-      spentTxIDs_.insert(tx.txID);
-      if (!tx.fromAddress.empty()) {
-        auto it = balances_.find(tx.fromAddress);
-        if (it != balances_.end()) {
-          it->second = (it->second > tx.amount) ? (it->second - tx.amount) : 0;
-        }
-        lastNonceMap_[tx.fromAddress] = std::max(lastNonceMap_[tx.fromAddress], tx.nonce);
-        transactionsByAddress_[tx.fromAddress].push_back(tx);
-      }
-    }
-  }
-}
-
-bool StateManager::isDoubleSpend(const std::string &txID) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return spentTxIDs_.count(txID) > 0;
-}
-
-void StateManager::rebuildState(const std::vector<Block> &chain) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  ownershipMap_.clear();
-  spentTxIDs_.clear();
-  balances_.clear();
-  lastNonceMap_.clear();
-  transactionsByAddress_.clear();
-
-  for (const auto &block : chain) {
-    for (const auto &tx : block.transactions) {
-      if (!tx.toAddress.empty()) {
+  void StateManager::applyBlock(const Block &block)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto &tx : block.transactions)
+    {
+      if (!tx.toAddress.empty())
+      {
         balances_[tx.toAddress] += tx.amount;
         transactionsByAddress_[tx.toAddress].push_back(tx);
       }
 
-      if (!tx.isCoinbase()) {
+      if (!tx.isCoinbase())
+      {
         ownershipMap_[tx.senderPublicKey].insert(tx.txID);
         spentTxIDs_.insert(tx.txID);
-        if (!tx.fromAddress.empty()) {
+        if (!tx.fromAddress.empty())
+        {
           auto it = balances_.find(tx.fromAddress);
-          if (it != balances_.end()) {
+          if (it != balances_.end())
+          {
             it->second = (it->second > tx.amount) ? (it->second - tx.amount) : 0;
           }
           lastNonceMap_[tx.fromAddress] = std::max(lastNonceMap_[tx.fromAddress], tx.nonce);
@@ -61,50 +33,101 @@ void StateManager::rebuildState(const std::vector<Block> &chain) {
       }
     }
   }
-}
 
-void StateManager::clear() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  ownershipMap_.clear();
-  spentTxIDs_.clear();
-  balances_.clear();
-  lastNonceMap_.clear();
-  transactionsByAddress_.clear();
-}
-
-size_t StateManager::getTransactionCount(const std::string &publicKey) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = ownershipMap_.find(publicKey);
-  if (it != ownershipMap_.end()) {
-    return it->second.size();
+  bool StateManager::isDoubleSpend(const std::string &txID) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return spentTxIDs_.count(txID) > 0;
   }
-  return 0;
-}
 
-std::set<std::string> StateManager::getAllSpentTxIDs() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return spentTxIDs_;
-}
+  void StateManager::rebuildState(const std::vector<Block> &chain)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ownershipMap_.clear();
+    spentTxIDs_.clear();
+    balances_.clear();
+    lastNonceMap_.clear();
+    transactionsByAddress_.clear();
 
-uint64_t StateManager::getBalance(const std::string &address) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = balances_.find(address);
-  return it == balances_.end() ? 0 : it->second;
-}
+    for (const auto &block : chain)
+    {
+      for (const auto &tx : block.transactions)
+      {
+        if (!tx.toAddress.empty())
+        {
+          balances_[tx.toAddress] += tx.amount;
+          transactionsByAddress_[tx.toAddress].push_back(tx);
+        }
 
-uint64_t StateManager::getLastNonce(const std::string &address) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = lastNonceMap_.find(address);
-  return it == lastNonceMap_.end() ? 0 : it->second;
-}
-
-std::vector<Transaction> StateManager::getTransactionsForAddress(const std::string &address) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = transactionsByAddress_.find(address);
-  if (it == transactionsByAddress_.end()) {
-    return {};
+        if (!tx.isCoinbase())
+        {
+          ownershipMap_[tx.senderPublicKey].insert(tx.txID);
+          spentTxIDs_.insert(tx.txID);
+          if (!tx.fromAddress.empty())
+          {
+            auto it = balances_.find(tx.fromAddress);
+            if (it != balances_.end())
+            {
+              it->second = (it->second > tx.amount) ? (it->second - tx.amount) : 0;
+            }
+            lastNonceMap_[tx.fromAddress] = std::max(lastNonceMap_[tx.fromAddress], tx.nonce);
+            transactionsByAddress_[tx.fromAddress].push_back(tx);
+          }
+        }
+      }
+    }
   }
-  return it->second;
-}
+
+  void StateManager::clear()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ownershipMap_.clear();
+    spentTxIDs_.clear();
+    balances_.clear();
+    lastNonceMap_.clear();
+    transactionsByAddress_.clear();
+  }
+
+  size_t StateManager::getTransactionCount(const std::string &publicKey) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = ownershipMap_.find(publicKey);
+    if (it != ownershipMap_.end())
+    {
+      return it->second.size();
+    }
+    return 0;
+  }
+
+  std::set<std::string> StateManager::getAllSpentTxIDs() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return spentTxIDs_;
+  }
+
+  uint64_t StateManager::getBalance(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = balances_.find(address);
+    return it == balances_.end() ? 0 : it->second;
+  }
+
+  uint64_t StateManager::getLastNonce(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = lastNonceMap_.find(address);
+    return it == lastNonceMap_.end() ? 0 : it->second;
+  }
+
+  std::vector<Transaction> StateManager::getTransactionsForAddress(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = transactionsByAddress_.find(address);
+    if (it == transactionsByAddress_.end())
+    {
+      return {};
+    }
+    return it->second;
+  }
 
 } // namespace blockchain
