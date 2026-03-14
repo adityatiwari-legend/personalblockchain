@@ -1,9 +1,10 @@
 /**
- * PersonalBlockchain Node â€” Main Entry Point
+ * PersonalBlockchain Node — Main Entry Point
  *
  * Usage:
  *   ./blockchain_node --port <p2p_port> --http-port <http_port>
  *       --peers <host1:port1,host2:port2,...> --difficulty <d>
+ *       --data-dir <path> --consensus <pow>
  *
  * Example (local):
  *   ./blockchain_node --port 5000 --http-port 8000 --peers
@@ -11,12 +12,14 @@
  *
  * Example (Docker):
  *   ./blockchain_node --port 5000 --http-port 8000 --peers
- * node2:5000,node3:5000
+ * node2:5000,node3:5000 --data-dir /app/data
  */
 
+#include "consensus/pow_engine.h"
 #include "core/blockchain.h"
 #include "network/http_server.h"
 #include "network/node.h"
+#include "storage/leveldb_manager.h"
 #include "wallet/wallet.h"
 
 #include <atomic>
@@ -34,8 +37,6 @@ static boost::asio::io_context *g_ioContext = nullptr;
 
 void signalHandler(int /*signal*/)
 {
-  // Signal handlers must only touch atomics â€” never acquire mutexes.
-  // Persistence will be done from the main thread after io_context stops.
   shutdownRequested.store(true);
   running = false;
   if (g_ioContext)
@@ -55,6 +56,9 @@ struct Config
   uint16_t p2pPort = 5000;
   uint16_t httpPort = 8000;
   uint32_t difficulty = 2;
+  std::string dataDir = "./data";
+  std::string consensus = "pow";
+  std::string name = "PersonalBlockchain";
   std::vector<PeerAddress> peers;
 };
 
@@ -78,6 +82,18 @@ Config parseArgs(int argc, char *argv[])
     {
       config.difficulty = static_cast<uint32_t>(std::stoi(argv[++i]));
     }
+    else if (arg == "--data-dir" && i + 1 < argc)
+    {
+      config.dataDir = argv[++i];
+    }
+    else if (arg == "--consensus" && i + 1 < argc)
+    {
+      config.consensus = argv[++i];
+    }
+    else if (arg == "--name" && i + 1 < argc)
+    {
+      config.name = argv[++i];
+    }
     else if (arg == "--peers" && i + 1 < argc)
     {
       std::string peersStr = argv[++i];
@@ -91,14 +107,12 @@ Config parseArgs(int argc, char *argv[])
         size_t colonPos = peerEntry.rfind(':');
         if (colonPos != std::string::npos && colonPos > 0)
         {
-          // Format: host:port
           pa.host = peerEntry.substr(0, colonPos);
           pa.port =
               static_cast<uint16_t>(std::stoi(peerEntry.substr(colonPos + 1)));
         }
         else
         {
-          // Just a port number, default to localhost
           pa.host = "127.0.0.1";
           pa.port = static_cast<uint16_t>(std::stoi(peerEntry));
         }
@@ -107,12 +121,15 @@ Config parseArgs(int argc, char *argv[])
     }
     else if (arg == "--help" || arg == "-h")
     {
-      std::cout << "PersonalBlockchain Node\n"
+      std::cout << "PersonalBlockchain Node v2.0.0\n"
                 << "Usage: blockchain_node [options]\n\n"
                 << "Options:\n"
                 << "  --port <port>        P2P port (default: 5000)\n"
                 << "  --http-port <port>   HTTP API port (default: 8000)\n"
                 << "  --difficulty <d>     Mining difficulty (default: 2)\n"
+                << "  --data-dir <path>    Data directory (default: ./data)\n"
+                << "  --consensus <type>   Consensus engine: pow (default: pow)\n"
+                << "  --name <name>        Chain name (default: PersonalBlockchain)\n"
                 << "  --peers <addrs>      Comma-separated peer addresses\n"
                 << "                       Format: host:port or just port\n"
                 << "                       Example: node2:5000,node3:5000\n"
@@ -132,11 +149,14 @@ int main(int argc, char *argv[])
   Config config = parseArgs(argc, argv);
 
   std::cout << "========================================\n"
-            << "  PersonalBlockchain Node v1.0.0\n"
+            << "  PersonalBlockchain Node v2.0.0\n"
             << "========================================\n"
             << "  P2P Port:    " << config.p2pPort << "\n"
             << "  HTTP Port:   " << config.httpPort << "\n"
             << "  Difficulty:  " << config.difficulty << "\n"
+            << "  Data Dir:    " << config.dataDir << "\n"
+            << "  Consensus:   " << config.consensus << "\n"
+            << "  Chain Name:  " << config.name << "\n"
             << "  Peers:       ";
 
   if (config.peers.empty())
@@ -157,8 +177,15 @@ int main(int argc, char *argv[])
 
   try
   {
-    // Initialize blockchain
-    blockchain::Blockchain chain(config.difficulty);
+    // Initialize persistent storage
+    blockchain::storage::LevelDBManager storage(config.dataDir);
+
+    // Initialize consensus engine
+    blockchain::consensus::PoWEngine powEngine;
+    blockchain::consensus::IConsensusEngine *engine = &powEngine;
+
+    // Initialize blockchain with consensus engine + persistence
+    blockchain::Blockchain chain(config.difficulty, engine, &storage);
 
     // Initialize Boost ASIO
     boost::asio::io_context ioContext;
@@ -168,7 +195,7 @@ int main(int argc, char *argv[])
     blockchain::network::Node p2pNode(ioContext, chain, config.p2pPort);
     p2pNode.start();
 
-    // Connect to peers (with a small delay to let the acceptor start)
+    // Connect to peers
     for (const auto &peer : config.peers)
     {
       p2pNode.connectToPeer(peer.host, peer.port);
@@ -212,6 +239,13 @@ int main(int argc, char *argv[])
     {
       if (t.joinable())
         t.join();
+    }
+
+    // Graceful shutdown: persist chain and state to disk
+    if (shutdownRequested.load())
+    {
+      std::cout << "[Main] Persisting chain to disk before shutdown..." << std::endl;
+      chain.persistChain();
     }
   }
   catch (const std::exception &e)

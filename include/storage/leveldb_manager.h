@@ -103,6 +103,9 @@ namespace blockchain
             bool hasPersistedChain() const;
 
         private:
+            // Recover canonical files from leftover tmp files after crashes
+            void recoverTempFiles();
+
             // Atomic write: write to .tmp, then rename to target
             bool atomicWrite(const std::string &filePath, const std::string &content);
 

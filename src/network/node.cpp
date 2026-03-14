@@ -1,4 +1,5 @@
 #include "network/node.h"
+#include <algorithm>
 #include <iostream>
 
 namespace blockchain
@@ -28,6 +29,11 @@ namespace blockchain
     void Node::start()
     {
       doAccept();
+
+      // Start heartbeat and gossip timers
+      startHeartbeatTimer();
+      startGossipTimer();
+
       // Request chain from peers after a short delay
       auto timer = std::make_shared<boost::asio::steady_timer>(
           ioContext_, std::chrono::seconds(2));
@@ -42,6 +48,12 @@ namespace blockchain
 
     void Node::connectToPeer(const std::string &host, uint16_t port, int retryCount)
     {
+      // Check if already connected
+      if (isAlreadyConnected(host, port))
+      {
+        return;
+      }
+
       auto resolver = std::make_shared<tcp::resolver>(ioContext_);
       resolver->async_resolve(
           host, std::to_string(port),
@@ -70,6 +82,19 @@ namespace blockchain
                     return;
                   }
 
+                  // Enforce MAX_PEERS
+                  {
+                    std::lock_guard<std::mutex> lock(peersMutex_);
+                    if (peers_.size() >= MAX_PEERS)
+                    {
+                      std::cerr << "[Node] MAX_PEERS reached, dropping new connection to "
+                                << host << ":" << port << std::endl;
+                      boost::system::error_code shutEc;
+                      socket->shutdown(tcp::socket::shutdown_both, shutEc);
+                      return;
+                    }
+                  }
+
                   std::cout << "[Node] Connected to peer " << host << ":" << port
                             << std::endl;
 
@@ -80,8 +105,10 @@ namespace blockchain
                         handleMessage(p, msg);
                       });
 
-                  // BUG-8: Set known listen port for correct peer identity
                   peer->setListenPort(port);
+
+                  // Register peer in scorer
+                  peerScorer_.addPeer(host, port);
 
                   {
                     std::lock_guard<std::mutex> lock(peersMutex_);
@@ -108,7 +135,7 @@ namespace blockchain
                   << ". Giving up." << std::endl;
         return;
       }
-      int delaySec = std::min(2 << retryCount, 30); // Exponential backoff: 2, 4, 8, 16, 30
+      int delaySec = std::min(2 << retryCount, 30);
       std::cout << "[Node] Retrying connection to " << host << ":" << port
                 << " in " << delaySec << "s (attempt " << (retryCount + 1)
                 << "/" << MAX_RETRIES << ")" << std::endl;
@@ -129,8 +156,7 @@ namespace blockchain
         if (seenTxIDs_.count(tx.txID))
           return;
         seenTxIDs_.insert(tx.txID);
-        // Limit seen set size
-        if (seenTxIDs_.size() > 10000)
+        while (seenTxIDs_.size() > 10000)
         {
           seenTxIDs_.erase(seenTxIDs_.begin());
         }
@@ -149,7 +175,7 @@ namespace blockchain
         if (seenBlockHashes_.count(block.hash))
           return;
         seenBlockHashes_.insert(block.hash);
-        if (seenBlockHashes_.size() > 1000)
+        while (seenBlockHashes_.size() > 1000)
         {
           seenBlockHashes_.erase(seenBlockHashes_.begin());
         }
@@ -194,6 +220,19 @@ namespace blockchain
             }
             else
             {
+              // Enforce MAX_PEERS limit
+              {
+                std::lock_guard<std::mutex> lock(peersMutex_);
+                if (peers_.size() >= MAX_PEERS)
+                {
+                  std::cerr << "[Node] MAX_PEERS reached, rejecting incoming connection" << std::endl;
+                  boost::system::error_code shutEc;
+                  socket.shutdown(tcp::socket::shutdown_both, shutEc);
+                  doAccept();
+                  return;
+                }
+              }
+
               std::cout << "[Node] Incoming connection from "
                         << socket.remote_endpoint().address().to_string() << ":"
                         << socket.remote_endpoint().port() << std::endl;
@@ -213,12 +252,20 @@ namespace blockchain
               peer->start();
             }
 
-            doAccept(); // Continue accepting
+            doAccept();
           });
     }
 
     void Node::handleMessage(std::shared_ptr<Peer> peer, const Message &msg)
     {
+      const std::string peerKey = peer->getEndpoint();
+      const auto peerPort = peer->getListenPort() > 0 ? peer->getListenPort() : peer->getPort();
+      const size_t sep = peerKey.rfind(':');
+      if (sep != std::string::npos && sep > 0)
+      {
+        peerScorer_.addPeer(peerKey.substr(0, sep), peerPort);
+      }
+
       // Rate limiting
       if (peer->isRateLimited(50))
       {
@@ -226,6 +273,16 @@ namespace blockchain
                   << std::endl;
         return;
       }
+
+      // Check ban status
+      if (peerScorer_.isBanned(peerKey))
+      {
+        std::cerr << "[Node] Ignoring message from banned peer " << peerKey << std::endl;
+        return;
+      }
+
+      // Mark peer as seen
+      peerScorer_.markSeen(peerKey);
 
       switch (msg.type)
       {
@@ -241,8 +298,7 @@ namespace blockchain
             if (!alreadySeen)
             {
               seenTxIDs_.insert(tx.txID);
-              // Enforce eviction limit on all insertion paths
-              if (seenTxIDs_.size() > 10000)
+              while (seenTxIDs_.size() > 10000)
               {
                 seenTxIDs_.erase(seenTxIDs_.begin());
               }
@@ -251,18 +307,26 @@ namespace blockchain
 
           if (!alreadySeen)
           {
-            blockchain_.addTransaction(tx);
-            // Re-broadcast to other peers
-            Message fwd;
-            fwd.type = MessageType::NEW_TRANSACTION;
-            fwd.payload = msg.payload;
-            broadcast(fwd, peer);
+            bool accepted = blockchain_.addTransaction(tx);
+            if (accepted)
+            {
+              rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_TX);
+              Message fwd;
+              fwd.type = MessageType::NEW_TRANSACTION;
+              fwd.payload = msg.payload;
+              broadcast(fwd, peer);
+            }
+            else
+            {
+              penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_TX);
+            }
           }
         }
         catch (const std::exception &e)
         {
           std::cerr << "[Node] Failed to parse transaction: " << e.what()
                     << std::endl;
+          penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_TX);
         }
         break;
       }
@@ -279,7 +343,7 @@ namespace blockchain
             if (!alreadySeen)
             {
               seenBlockHashes_.insert(block.hash);
-              if (seenBlockHashes_.size() > 1000)
+              while (seenBlockHashes_.size() > 1000)
               {
                 seenBlockHashes_.erase(seenBlockHashes_.begin());
               }
@@ -288,34 +352,38 @@ namespace blockchain
 
           if (!alreadySeen)
           {
-            // Try to add this block by replacing chain if longer
             auto chain = blockchain_.getChain();
+            bool accepted = false;
+
             if (block.index == chain.size() &&
                 block.previousHash == chain.back().hash)
             {
-              // Append the block
               chain.push_back(block);
-              blockchain_.replaceChain(chain);
+              accepted = blockchain_.replaceChain(chain);
             }
             else if (block.index >= chain.size())
             {
-              // We might be behind, request full chain
               Message req;
               req.type = MessageType::REQUEST_CHAIN;
               req.payload = nlohmann::json::object();
               peer->send(req);
             }
 
-            // Re-broadcast
-            Message fwd;
-            fwd.type = MessageType::NEW_BLOCK;
-            fwd.payload = msg.payload;
-            broadcast(fwd, peer);
+            // Only re-broadcast AFTER validation succeeds
+            if (accepted)
+            {
+              rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_BLOCK);
+              Message fwd;
+              fwd.type = MessageType::NEW_BLOCK;
+              fwd.payload = msg.payload;
+              broadcast(fwd, peer);
+            }
           }
         }
         catch (const std::exception &e)
         {
           std::cerr << "[Node] Failed to parse block: " << e.what() << std::endl;
+          penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_BLOCK);
         }
         break;
       }
@@ -338,11 +406,15 @@ namespace blockchain
           {
             newChain.push_back(Block::fromJson(blockJson));
           }
-          blockchain_.replaceChain(newChain);
+          if (blockchain_.replaceChain(newChain))
+          {
+            rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_BLOCK);
+          }
         }
         catch (const std::exception &e)
         {
           std::cerr << "[Node] Failed to parse chain: " << e.what() << std::endl;
+          penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_BLOCK);
         }
         break;
       }
@@ -357,12 +429,33 @@ namespace blockchain
       }
 
       case MessageType::PONG:
-        // Connection is alive
+        peerScorer_.markPongReceived(peerKey);
         break;
+
+      case MessageType::REQUEST_PEERS:
+      {
+        auto shareablePeers = peerScorer_.getShareablePeers();
+        nlohmann::json peerArray = nlohmann::json::array();
+        for (const auto &p : shareablePeers)
+        {
+          peerArray.push_back(p);
+        }
+        Message resp;
+        resp.type = MessageType::RESPONSE_PEERS;
+        resp.payload = peerArray;
+        peer->send(resp);
+        break;
+      }
+
+      case MessageType::RESPONSE_PEERS:
+      {
+        handleReceivedPeers(msg.payload);
+        break;
+      }
 
       case MessageType::PEER_LIST:
       {
-        // Could implement peer discovery here
+        handleReceivedPeers(msg.payload);
         break;
       }
 
@@ -394,6 +487,163 @@ namespace blockchain
           peer->send(msg);
         }
       }
+    }
+
+    // ─── Gossip-based peer discovery ────────────────────────────────────
+
+    void Node::requestPeersFromAll()
+    {
+      Message msg;
+      msg.type = MessageType::REQUEST_PEERS;
+      msg.payload = nlohmann::json::object();
+      broadcast(msg);
+    }
+
+    void Node::handleReceivedPeers(const nlohmann::json &payload)
+    {
+      if (!payload.is_array())
+        return;
+
+      for (const auto &entry : payload)
+      {
+        if (!entry.is_string())
+          continue;
+
+        std::string peerAddr = entry.get<std::string>();
+        size_t colonPos = peerAddr.rfind(':');
+        if (colonPos == std::string::npos || colonPos == 0)
+          continue;
+
+        std::string host = peerAddr.substr(0, colonPos);
+        uint16_t port = 0;
+        try
+        {
+          port = static_cast<uint16_t>(std::stoi(peerAddr.substr(colonPos + 1)));
+        }
+        catch (...)
+        {
+          continue;
+        }
+
+        if (port == port_)
+          continue;
+        if (isAlreadyConnected(host, port))
+          continue;
+        if (peerScorer_.isBanned(host + ":" + std::to_string(port)))
+          continue;
+
+        std::cout << "[Gossip] Discovered new peer: " << host << ":" << port << std::endl;
+        connectToPeer(host, port);
+      }
+    }
+
+    void Node::startGossipTimer()
+    {
+      auto timer = std::make_shared<boost::asio::steady_timer>(
+          ioContext_, std::chrono::seconds(30));
+      timer->async_wait([this, timer](boost::system::error_code ec)
+                        {
+        if (!ec)
+        {
+          requestPeersFromAll();
+          peerScorer_.evictStalePeers(300);
+          startGossipTimer();
+        } });
+    }
+
+    // ─── Heartbeat / PING-PONG ──────────────────────────────────────────
+
+    void Node::startHeartbeatTimer()
+    {
+      auto timer = std::make_shared<boost::asio::steady_timer>(
+          ioContext_, std::chrono::seconds(15));
+      timer->async_wait([this, timer](boost::system::error_code ec)
+                        {
+        if (!ec)
+        {
+          Message ping;
+          ping.type = MessageType::PING;
+          ping.payload = nlohmann::json::object();
+
+          {
+            std::lock_guard<std::mutex> lock(peersMutex_);
+            // Clean up disconnected peers
+            peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
+                                        [](const std::shared_ptr<Peer> &p)
+                                        {
+                                          return !p->isConnected();
+                                        }),
+                         peers_.end());
+
+            for (auto &peer : peers_)
+            {
+              peerScorer_.markPingSent(peer->getEndpoint());
+              peer->send(ping);
+            }
+          }
+
+          auto timedOutPeers = peerScorer_.getHeartbeatTimeoutPeers(45);
+          if (!timedOutPeers.empty())
+          {
+            std::lock_guard<std::mutex> lock(peersMutex_);
+            for (const auto &endpoint : timedOutPeers)
+            {
+              for (auto &peer : peers_)
+              {
+                if (peer->getEndpoint() == endpoint)
+                {
+                  std::cerr << "[Heartbeat] Disconnecting timed-out peer: "
+                            << endpoint << std::endl;
+                  peer->close();
+                }
+              }
+            }
+          }
+
+          startHeartbeatTimer();
+        } });
+    }
+
+    // ─── Peer dedup ─────────────────────────────────────────────────────
+
+    bool Node::isAlreadyConnected(const std::string &host, uint16_t port) const
+    {
+      std::lock_guard<std::mutex> lock(peersMutex_);
+      for (const auto &peer : peers_)
+      {
+        if (!peer->isConnected())
+          continue;
+        if (peer->getListenPort() == port)
+          return true;
+        if (peer->getPort() == port)
+          return true;
+      }
+      return false;
+    }
+
+    // ─── Peer scoring bridge ────────────────────────────────────────────
+
+    void Node::penalizePeerByEndpoint(const std::string &endpoint, int32_t penalty)
+    {
+      bool banned = peerScorer_.penalizePeer(endpoint, penalty);
+      if (banned)
+      {
+        std::lock_guard<std::mutex> lock(peersMutex_);
+        for (auto &peer : peers_)
+        {
+          if (peer->getEndpoint() == endpoint)
+          {
+            std::cerr << "[Node] Disconnecting banned peer: " << endpoint << std::endl;
+            peer->close();
+            break;
+          }
+        }
+      }
+    }
+
+    void Node::rewardPeerByEndpoint(const std::string &endpoint, int32_t reward)
+    {
+      peerScorer_.rewardPeer(endpoint, reward);
     }
 
   } // namespace network

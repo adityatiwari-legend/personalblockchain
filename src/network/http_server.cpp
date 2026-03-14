@@ -267,6 +267,10 @@ namespace blockchain
       {
         return handleGetPeers();
       }
+      if (req.method == "GET" && req.path == "/peers/scores")
+      {
+        return handleGetPeerScores();
+      }
       if (req.method == "GET" && req.path == "/health")
       {
         return handleHealth();
@@ -417,8 +421,12 @@ namespace blockchain
         if (minerAddress.empty())
         {
           // Create a temporary wallet for mining reward
+          // WARNING: The private key is discarded — coins sent here are unspendable.
+          // Callers should provide a persistent minerAddress.
           Wallet minerWallet;
           minerAddress = minerWallet.getPublicKey();
+          std::cerr << "[HTTP] /mine called without minerAddress — using ephemeral wallet. "
+                    << "Coins will be unspendable." << std::endl;
         }
 
         Block newBlock = blockchain_.minePendingTransactions(minerAddress);
@@ -530,6 +538,42 @@ namespace blockchain
 
         HttpResponse resp;
         resp.body = j.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleGetPeerScores()
+    {
+      try
+      {
+        auto allPeers = node_.getPeerScorer().getAllPeers();
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto &[key, info] : allPeers)
+        {
+          nlohmann::json p;
+          p["endpoint"] = key;
+          p["host"] = info.host;
+          p["port"] = info.port;
+          p["score"] = info.score;
+          p["banned"] = info.banned;
+          p["invalidBlockCount"] = info.invalidBlockCount;
+          j.push_back(p);
+        }
+
+        nlohmann::json out;
+        out["count"] = allPeers.size();
+        out["peers"] = j;
+
+        HttpResponse resp;
+        resp.body = out.dump(2);
         return resp;
       }
       catch (const std::exception &e)

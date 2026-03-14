@@ -89,6 +89,18 @@ namespace blockchain
              */
             void markSeen(const std::string &key);
 
+            /** Mark that a heartbeat ping was sent to a peer. */
+            void markPingSent(const std::string &key);
+
+            /** Mark that a heartbeat pong was received from a peer. */
+            void markPongReceived(const std::string &key);
+
+            /**
+             * Return peers with overdue pongs.
+             * @param timeoutSeconds Max allowed age of pending pong
+             */
+            std::vector<std::string> getHeartbeatTimeoutPeers(int64_t timeoutSeconds) const;
+
             /**
              * Get all known, non-banned peer addresses (for gossip sharing).
              * Returns list of "host:port" strings.

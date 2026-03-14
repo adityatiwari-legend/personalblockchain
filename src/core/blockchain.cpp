@@ -5,15 +5,51 @@
 namespace blockchain
 {
 
-  Blockchain::Blockchain(uint32_t difficulty) : difficulty_(difficulty)
+  Blockchain::Blockchain(uint32_t difficulty,
+                         consensus::IConsensusEngine *consensusEngine,
+                         storage::LevelDBManager *storage)
+      : difficulty_(difficulty),
+        consensusEngine_(consensusEngine),
+        storage_(storage)
   {
     std::cout << "[Blockchain] Initializing with difficulty " << difficulty
               << std::endl;
+
+    if (consensusEngine_)
+    {
+      std::cout << "[Blockchain] Consensus engine: " << consensusEngine_->name() << std::endl;
+    }
+
+    // Try to load chain from persistent storage
+    if (storage_ && storage_->hasPersistedChain())
+    {
+      std::cout << "[Blockchain] Loading chain from disk..." << std::endl;
+      auto loaded = storage_->loadChain();
+      if (!loaded.empty() && validateChainAgainstConsensus(loaded))
+      {
+        chain_ = std::move(loaded);
+        stateManager_.rebuildState(chain_);
+        std::cout << "[Blockchain] Loaded " << chain_.size()
+                  << " blocks from disk. Tip: " << chain_.back().hash << std::endl;
+        return;
+      }
+      else
+      {
+        std::cerr << "[Blockchain] Persisted chain invalid or empty. Creating fresh genesis." << std::endl;
+      }
+    }
+
     std::cout << "[Blockchain] Mining genesis block..." << std::endl;
 
     Block genesis = Block::createGenesis(difficulty);
     chain_.push_back(genesis);
     stateManager_.applyBlock(genesis);
+
+    // Persist genesis block
+    if (storage_)
+    {
+      storage_->saveChain(chain_);
+    }
 
     std::cout << "[Blockchain] Genesis block created: " << genesis.hash
               << std::endl;
@@ -78,6 +114,19 @@ namespace blockchain
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Dynamic difficulty retarget via consensus engine
+    uint32_t blockDifficulty = difficulty_;
+    if (consensusEngine_)
+    {
+      blockDifficulty = consensusEngine_->nextDifficulty(chain_, difficulty_);
+      if (blockDifficulty != difficulty_)
+      {
+        std::cout << "[Blockchain] Difficulty retarget: " << difficulty_
+                  << " -> " << blockDifficulty << std::endl;
+        difficulty_ = blockDifficulty;
+      }
+    }
+
     // Create coinbase (mining reward) transaction
     Transaction coinbase;
     coinbase.senderPublicKey = "COINBASE";
@@ -86,19 +135,28 @@ namespace blockchain
     coinbase.timestamp = Transaction::currentTimestamp();
     coinbase.computeTxID();
 
-    // Collect transactions for this block
+    // Collect transactions for this block (cap at 100 to bound block size)
     std::vector<Transaction> blockTxs;
     blockTxs.push_back(coinbase);
 
-    // Add mempool transactions
-    for (const auto &tx : mempool_)
+    static constexpr size_t MAX_TXS_PER_BLOCK = 100;
+    size_t txCount = std::min(mempool_.size(), MAX_TXS_PER_BLOCK);
+    for (size_t i = 0; i < txCount; i++)
     {
-      blockTxs.push_back(tx);
+      blockTxs.push_back(mempool_[i]);
     }
 
     // Create and mine the block
-    Block newBlock(chain_.size(), chain_.back().hash, blockTxs, difficulty_);
-    newBlock.mineBlock();
+    Block newBlock(chain_.size(), chain_.back().hash, blockTxs, blockDifficulty);
+
+    if (consensusEngine_)
+    {
+      consensusEngine_->sealBlock(newBlock, minerAddress);
+    }
+    else
+    {
+      newBlock.mineBlock();
+    }
 
     // Add to chain
     chain_.push_back(newBlock);
@@ -106,11 +164,24 @@ namespace blockchain
     // Update state
     stateManager_.applyBlock(newBlock);
 
-    // Clear mempool
-    mempool_.clear();
+    // Remove mined transactions from mempool
+    if (txCount >= mempool_.size())
+    {
+      mempool_.clear();
+    }
+    else
+    {
+      mempool_.erase(mempool_.begin(), mempool_.begin() + static_cast<long>(txCount));
+    }
 
     std::cout << "[Blockchain] Block #" << newBlock.index
               << " added to chain. Chain length: " << chain_.size() << std::endl;
+
+    // Persist to disk
+    if (storage_)
+    {
+      storage_->appendBlock(newBlock);
+    }
 
     if (onBlockAdded_)
     {
@@ -123,7 +194,33 @@ namespace blockchain
   bool Blockchain::isChainValid() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    return isChainValid(chain_);
+    return validateChainAgainstConsensus(chain_);
+  }
+
+  bool Blockchain::validateChainAgainstConsensus(const std::vector<Block> &chain) const
+  {
+    if (!isChainValid(chain))
+    {
+      return false;
+    }
+
+    if (!consensusEngine_)
+    {
+      return true;
+    }
+
+    for (size_t i = 1; i < chain.size(); i++)
+    {
+      if (!consensusEngine_->validateBlock(chain[i], chain[i - 1]))
+      {
+        std::cerr << "[Consensus] Block #" << i
+                  << " rejected by consensus engine " << consensusEngine_->name()
+                  << std::endl;
+        return false;
+      }
+    }
+
+    return true;
   }
 
   bool Blockchain::isChainValid(const std::vector<Block> &chain)
@@ -132,9 +229,24 @@ namespace blockchain
       return false;
 
     // Validate genesis block
-    if (chain[0].previousHash != std::string(64, '0'))
+    const Block &genesis = chain[0];
+    if (genesis.previousHash != std::string(64, '0'))
     {
       std::cerr << "[Validate] Invalid genesis previousHash" << std::endl;
+      return false;
+    }
+
+    // Validate genesis hash integrity
+    if (genesis.hash != genesis.calculateHash())
+    {
+      std::cerr << "[Validate] Genesis block hash mismatch" << std::endl;
+      return false;
+    }
+
+    // Validate genesis Merkle root
+    if (genesis.merkleRoot != genesis.computeMerkleRoot())
+    {
+      std::cerr << "[Validate] Genesis block invalid Merkle root" << std::endl;
       return false;
     }
 
@@ -142,6 +254,13 @@ namespace blockchain
     {
       const Block &current = chain[i];
       const Block &previous = chain[i - 1];
+
+      // Check block index is sequential
+      if (current.index != i)
+      {
+        std::cerr << "[Validate] Block #" << i << " has incorrect index " << current.index << std::endl;
+        return false;
+      }
 
       // Check hash integrity
       if (current.hash != current.calculateHash())
@@ -191,15 +310,27 @@ namespace blockchain
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (newChain.size() <= chain_.size())
+    // Use consensus engine for chain selection if available
+    if (consensusEngine_)
     {
-      std::cout
-          << "[Consensus] Received chain is not longer. Keeping current chain."
-          << std::endl;
-      return false;
+      if (!consensusEngine_->shouldAcceptChain(chain_, newChain))
+      {
+        std::cout << "[Consensus] Consensus engine rejected candidate chain." << std::endl;
+        return false;
+      }
+    }
+    else
+    {
+      if (newChain.size() <= chain_.size())
+      {
+        std::cout
+            << "[Consensus] Received chain is not longer. Keeping current chain."
+            << std::endl;
+        return false;
+      }
     }
 
-    if (!isChainValid(newChain))
+    if (!validateChainAgainstConsensus(newChain))
     {
       std::cerr << "[Consensus] Received chain is invalid. Rejecting."
                 << std::endl;
@@ -223,7 +354,32 @@ namespace blockchain
                                   }),
                    mempool_.end());
 
+    // Persist entire new chain
+    if (storage_)
+    {
+      storage_->saveChain(chain_);
+    }
+
     return true;
+  }
+
+  void Blockchain::persistChain()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (storage_)
+    {
+      storage_->saveChain(chain_);
+      storage_->saveState(stateManager_);
+    }
+  }
+
+  void Blockchain::persistBlock(const Block &block)
+  {
+    // No lock needed — storage has its own mutex
+    if (storage_)
+    {
+      storage_->appendBlock(block);
+    }
   }
 
   std::vector<Block> Blockchain::getChain() const
@@ -263,18 +419,13 @@ namespace blockchain
 
   void Blockchain::chainFromJson(const nlohmann::json &j)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
     std::vector<Block> newChain;
     for (const auto &blockJson : j)
     {
       newChain.push_back(Block::fromJson(blockJson));
     }
 
-    if (isChainValid(newChain) && newChain.size() > chain_.size())
-    {
-      chain_ = newChain;
-      stateManager_.rebuildState(chain_);
-    }
+    replaceChain(newChain);
   }
 
   void Blockchain::setOnBlockAdded(std::function<void(const Block &)> callback)

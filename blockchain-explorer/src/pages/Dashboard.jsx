@@ -1,6 +1,6 @@
-﻿import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { ArrowUpRight, ArrowDownLeft, Wallet, Bitcoin, Activity, Box, Clock, Settings, ArrowDown } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, Wallet, Bitcoin, Activity, Box, Clock, Settings, ArrowDown, WifiOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Toaster } from 'react-hot-toast';
 
@@ -16,28 +16,42 @@ export default function Dashboard() {
   const [peers, setPeers] = useState([]);
   const [chainName, setChainName] = useState('PersonalBlockchain');
   const [isLoading, setIsLoading] = useState(true);
+  const [isConnected, setIsConnected] = useState(true);
+  const fetchInFlight = useRef(false);
 
-  const fetchData = async () => {
-    const [chainResult, peersResult, healthResult] = await Promise.allSettled([
-      blockchainApi.getChain(),
-      blockchainApi.getPeers(),
-      blockchainApi.getHealth()
-    ]);
-    if (chainResult.status === 'fulfilled') setChain(chainResult.value || []);
-    if (peersResult.status === 'fulfilled') setPeers(peersResult.value || []);
-    if (healthResult.status === 'fulfilled' && healthResult.value?.name) setChainName(healthResult.value.name);
-    setIsLoading(false);
-  };
+  const fetchData = useCallback(async () => {
+    // Prevent overlapping requests
+    if (fetchInFlight.current) return;
+    fetchInFlight.current = true;
+
+    try {
+      const [chainResult, peersResult, healthResult] = await Promise.allSettled([
+        blockchainApi.getChain(),
+        blockchainApi.getPeers(),
+        blockchainApi.getHealth()
+      ]);
+
+      const anyFulfilled = [chainResult, peersResult, healthResult].some(r => r.status === 'fulfilled');
+      setIsConnected(anyFulfilled);
+
+      if (chainResult.status === 'fulfilled') setChain(chainResult.value || []);
+      if (peersResult.status === 'fulfilled') setPeers(peersResult.value || []);
+      if (healthResult.status === 'fulfilled' && healthResult.value?.name) setChainName(healthResult.value.name);
+      setIsLoading(false);
+    } finally {
+      fetchInFlight.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   // Stats
   const currentHeight = chain.length;
-  
+
   // Chart Data
   const chartData = useMemo(() => {
     return chain.slice(-20).map(b => ({
@@ -49,10 +63,38 @@ export default function Dashboard() {
   // Recent Blocks for Table
   const recentBlocks = [...chain].reverse().slice(0, 5);
 
+  // Format timestamp — handles both ISO strings and Unix timestamps
+  const formatTime = (ts) => {
+    if (!ts) return 'N/A';
+    // If it's a string (ISO 8601), parse directly
+    if (typeof ts === 'string') return new Date(ts).toLocaleTimeString();
+    // If it's a number (Unix epoch), convert
+    return new Date(ts * 1000).toLocaleTimeString();
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen bg-[#0b0f19] text-gray-200 items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-[#00ff9d] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-400">Connecting to node...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen bg-[#0b0f19] text-gray-200 font-sans selection:bg-[#00ff9d] selection:text-black overflow-hidden">
       <Toaster position="bottom-right" />
-      
+
+      {/* Connection lost banner */}
+      {!isConnected && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-red-900/90 text-white text-center py-2 text-sm flex items-center justify-center gap-2">
+          <WifiOff className="w-4 h-4" />
+          Backend unreachable — retrying...
+        </div>
+      )}
+
       {/* 1. Sidebar */}
       <Sidebar />
 
@@ -61,10 +103,10 @@ export default function Dashboard() {
         <Header chainName={chainName} />
 
         <main className="px-8 pb-12 grid grid-cols-12 gap-6">
-          
+
           {/* LEFT COLUMN (8 cols) */}
           <div className="col-span-12 xl:col-span-8 flex flex-col gap-6">
-            
+
             {/* Main Chart Card */}
             <div className="dashboard-card relative overflow-hidden min-h-[400px] flex flex-col justify-between">
               <div className="flex justify-between items-start mb-6 z-10">
@@ -98,17 +140,17 @@ export default function Dashboard() {
                     </defs>
                     <XAxis dataKey="name" hide />
                     <YAxis hide domain={['auto', 'auto']} />
-                    <Tooltip 
+                    <Tooltip
                       contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '12px', color: '#fff' }}
                       itemStyle={{ color: '#fff' }}
                     />
-                    <Area 
-                      type="monotone" 
-                      dataKey="transactions" 
-                      stroke="#9ca3af" 
-                      strokeWidth={2} 
-                      fillOpacity={1} 
-                      fill="url(#colorTx)" 
+                    <Area
+                      type="monotone"
+                      dataKey="transactions"
+                      stroke="#9ca3af"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorTx)"
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -121,7 +163,7 @@ export default function Dashboard() {
                 <h3 className="text-lg font-bold text-white">Latest Blocks</h3>
                 <button className="text-xs font-bold text-[#00ff9d] hover:underline">View All</button>
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -146,7 +188,7 @@ export default function Dashboard() {
                           {block.hash ? `${block.hash.substring(0, 8)}...` : 'Genesis'}
                         </td>
                         <td className="py-4 text-gray-300">
-                          {new Date(block.timestamp * 1000).toLocaleTimeString()}
+                          {formatTime(block.timestamp)}
                         </td>
                         <td className="py-4 text-white font-medium pl-4">
                           {block.transactions?.length || 0}
@@ -163,9 +205,8 @@ export default function Dashboard() {
 
             {/* Recent Transactions Stub */}
             <div className="flex gap-6">
-                 {/* Creating dummy list just for UI representation as per list in image */}
                  <div className="flex-1 dashboard-card">
-                    <h3 className="text-lg font-bold text-white mb-4">Recent Actvity</h3>
+                    <h3 className="text-lg font-bold text-white mb-4">Recent Activity</h3>
                     <div className="space-y-4">
                         {[1, 2].map((_, i) => (
                             <div key={i} className="flex justify-between items-center p-3 rounded-xl hover:bg-[#1f2937] transition-colors cursor-pointer border border-transparent hover:border-gray-800">
@@ -186,7 +227,7 @@ export default function Dashboard() {
                         ))}
                     </div>
                  </div>
-                 
+
                  <div className="flex-1 dashboard-card bg-gradient-to-br from-[#1f2937] to-[#111827]">
                     <div className="h-full flex flex-col justify-center items-center text-center p-4">
                         <div className="w-12 h-12 bg-[#00ff9d] rounded-xl flex items-center justify-center mb-4 text-[#0b0f19]">
@@ -202,14 +243,14 @@ export default function Dashboard() {
 
           {/* RIGHT COLUMN (4 cols) */}
           <div className="col-span-12 xl:col-span-4 flex flex-col gap-6">
-            
+
             {/* Quick Swap Form (Transaction) */}
             <div className="dashboard-card">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-lg font-bold text-white">Quick Transaction</h3>
                 <Settings className="w-4 h-4 text-gray-500 cursor-pointer hover:text-white" />
               </div>
-              
+
               <TransactionForm onSuccess={fetchData} />
             </div>
 
@@ -222,15 +263,15 @@ export default function Dashboard() {
                <MiningPanel onSuccess={fetchData} minimal />
             </div>
 
-            {/* Network Peers (Pie Chart Area in reference) */}
+            {/* Network Peers */}
             <div className="dashboard-card flex flex-col min-h-[300px] p-0 overflow-hidden relative border border-[#1f2937]">
                 <div className="absolute top-6 left-6 z-10">
-                    <h3 className="text-lg font-bold text-white">Network Typography</h3>
+                    <h3 className="text-lg font-bold text-white">Network Topology</h3>
                 </div>
                 <div className="flex-1 bg-[#0b0f19]">
                 {(typeof window !== 'undefined') && (
                     <ForceGraph2D
-                    width={400} 
+                    width={400}
                     height={300}
                     graphData={{
                         nodes: [{id: 'You', val: 10}, ...peers.map(p => ({id: p, val: 5}))],

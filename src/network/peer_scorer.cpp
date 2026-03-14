@@ -110,6 +110,55 @@ namespace blockchain
             }
         }
 
+        void PeerScorer::markPingSent(const std::string &key)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = peers_.find(key);
+            if (it == peers_.end())
+            {
+                return;
+            }
+
+            if (it->second.pendingPong)
+            {
+                return;
+            }
+
+            it->second.lastPingSent = std::chrono::steady_clock::now();
+            it->second.pendingPong = true;
+        }
+
+        void PeerScorer::markPongReceived(const std::string &key)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = peers_.find(key);
+            if (it == peers_.end())
+            {
+                return;
+            }
+
+            it->second.pendingPong = false;
+            it->second.lastSeen = std::chrono::steady_clock::now();
+        }
+
+        std::vector<std::string> PeerScorer::getHeartbeatTimeoutPeers(int64_t timeoutSeconds) const
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            std::vector<std::string> timedOut;
+            auto now = std::chrono::steady_clock::now();
+            auto timeout = std::chrono::seconds(timeoutSeconds);
+
+            for (const auto &[key, info] : peers_)
+            {
+                if (info.pendingPong && now - info.lastPingSent > timeout)
+                {
+                    timedOut.push_back(key);
+                }
+            }
+
+            return timedOut;
+        }
+
         std::vector<std::string> PeerScorer::getShareablePeers() const
         {
             std::lock_guard<std::mutex> lock(mutex_);

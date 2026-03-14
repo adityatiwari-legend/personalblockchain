@@ -23,6 +23,7 @@ namespace blockchain
               stateFilePath_(dataDir + "/state.json")
         {
             ensureDirectory(dataDir_);
+            recoverTempFiles();
             std::cout << "[Storage] Data directory: " << dataDir_ << std::endl;
         }
 
@@ -100,17 +101,29 @@ namespace blockchain
                     j = nlohmann::json::parse(raw);
                     if (!j.is_array())
                     {
-                        j = nlohmann::json::array();
+                        std::cerr << "[Storage] appendBlock aborted: existing chain file is not an array." << std::endl;
+                        return false;
                     }
                 }
                 catch (...)
                 {
-                    j = nlohmann::json::array();
+                    std::cerr << "[Storage] appendBlock aborted: existing chain file is malformed." << std::endl;
+                    return false;
                 }
             }
             else
             {
                 j = nlohmann::json::array();
+            }
+
+            if (!j.empty())
+            {
+                Block tip = Block::fromJson(j.back());
+                if (block.index != tip.index + 1 || block.previousHash != tip.hash)
+                {
+                    std::cerr << "[Storage] appendBlock aborted: block does not extend persisted tip." << std::endl;
+                    return false;
+                }
             }
 
             j.push_back(block.toJson());
@@ -190,7 +203,19 @@ namespace blockchain
 
         bool LevelDBManager::hasPersistedChain() const
         {
-            return fs::exists(chainFilePath_) && fs::file_size(chainFilePath_) > 2;
+            if (!fs::exists(chainFilePath_) || !fs::is_regular_file(chainFilePath_))
+            {
+                return false;
+            }
+
+            std::error_code ec;
+            auto sz = fs::file_size(chainFilePath_, ec);
+            if (ec)
+            {
+                return false;
+            }
+
+            return sz > 2;
         }
 
         // ─── Private helpers ──────────────────────────────────────────────
@@ -199,6 +224,7 @@ namespace blockchain
         {
             // Write to tmp file first, then rename — prevents partial writes on crash
             std::string tmpPath = filePath + ".tmp";
+            std::string bakPath = filePath + ".bak";
 
             try
             {
@@ -219,9 +245,35 @@ namespace blockchain
                     return false;
                 }
 
-                // Atomic rename (POSIX rename is atomic on same filesystem)
-                // On Windows, std::filesystem::rename replaces target atomically
-                fs::rename(tmpPath, filePath);
+                std::error_code ec;
+                if (fs::exists(filePath, ec) && !ec)
+                {
+                    fs::remove(bakPath, ec);
+                    ec.clear();
+                    fs::rename(filePath, bakPath, ec);
+                    if (ec)
+                    {
+                        std::cerr << "[Storage] Failed to create backup for " << filePath
+                                  << ": " << ec.message() << std::endl;
+                        return false;
+                    }
+                }
+
+                ec.clear();
+                fs::rename(tmpPath, filePath, ec);
+                if (ec)
+                {
+                    std::cerr << "[Storage] Failed to install new file " << filePath
+                              << ": " << ec.message() << std::endl;
+                    if (fs::exists(bakPath))
+                    {
+                        std::error_code restoreEc;
+                        fs::rename(bakPath, filePath, restoreEc);
+                    }
+                    return false;
+                }
+
+                fs::remove(bakPath, ec);
                 return true;
             }
             catch (const std::exception &e)
@@ -236,6 +288,35 @@ namespace blockchain
                 {
                 }
                 return false;
+            }
+        }
+
+        void LevelDBManager::recoverTempFiles()
+        {
+            const std::vector<std::string> canonicalFiles = {chainFilePath_, stateFilePath_};
+
+            for (const auto &filePath : canonicalFiles)
+            {
+                std::string tmpPath = filePath + ".tmp";
+
+                std::error_code ec;
+                if (!fs::exists(tmpPath, ec) || ec)
+                {
+                    continue;
+                }
+
+                if (fs::exists(filePath, ec) && !ec)
+                {
+                    fs::remove(tmpPath, ec);
+                    continue;
+                }
+
+                fs::rename(tmpPath, filePath, ec);
+                if (!ec)
+                {
+                    std::cout << "[Storage] Recovered " << filePath
+                              << " from leftover tmp file." << std::endl;
+                }
             }
         }
 

@@ -16,6 +16,12 @@ services:
     networks:
       - blockchain_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
   node2:
     build: .
@@ -35,7 +41,14 @@ services:
       - blockchain_net
     restart: unless-stopped
     depends_on:
-      - node1
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
   node3:
     build: .
@@ -55,7 +68,14 @@ services:
       - blockchain_net
     restart: unless-stopped
     depends_on:
-      - node1
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
 networks:
   blockchain_net:
