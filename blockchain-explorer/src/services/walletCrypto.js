@@ -1,15 +1,24 @@
 import { ec as EC } from 'elliptic';
+import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex as nobleBytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 
 const secp = new EC('secp256k1');
 
-function bytesToHex(bytes) {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 export async function sha256Hex(input) {
   const encoded = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest('SHA-256', encoded);
-  return bytesToHex(new Uint8Array(digest));
+  const webCrypto = globalThis.crypto;
+
+  // Some server-hosted contexts do not expose crypto.subtle; use a pure JS fallback.
+  if (webCrypto?.subtle?.digest) {
+    try {
+      const digest = await webCrypto.subtle.digest('SHA-256', encoded);
+      return nobleBytesToHex(new Uint8Array(digest));
+    } catch {
+      // Fallback below handles any runtime subtle API failures.
+    }
+  }
+
+  return nobleBytesToHex(nobleSha256(utf8ToBytes(input)));
 }
 
 export function derivePublicKey(privateKeyHex) {
