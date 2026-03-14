@@ -8,6 +8,11 @@ namespace blockchain
   void StateManager::applyBlock(const Block &block)
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    applyBlockState(block);
+  }
+
+  void StateManager::applyBlockState(const Block &block)
+  {
     for (const auto &tx : block.transactions)
     {
       if (!tx.toAddress.empty())
@@ -51,30 +56,7 @@ namespace blockchain
 
     for (const auto &block : chain)
     {
-      for (const auto &tx : block.transactions)
-      {
-        if (!tx.toAddress.empty())
-        {
-          balances_[tx.toAddress] += tx.amount;
-          transactionsByAddress_[tx.toAddress].push_back(tx);
-        }
-
-        if (!tx.isCoinbase())
-        {
-          ownershipMap_[tx.senderPublicKey].insert(tx.txID);
-          spentTxIDs_.insert(tx.txID);
-          if (!tx.fromAddress.empty())
-          {
-            auto it = balances_.find(tx.fromAddress);
-            if (it != balances_.end())
-            {
-              it->second = (it->second > tx.amount) ? (it->second - tx.amount) : 0;
-            }
-            lastNonceMap_[tx.fromAddress] = std::max(lastNonceMap_[tx.fromAddress], tx.nonce);
-            transactionsByAddress_[tx.fromAddress].push_back(tx);
-          }
-        }
-      }
+      applyBlockState(block);
     }
   }
 

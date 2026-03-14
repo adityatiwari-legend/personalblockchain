@@ -1,4 +1,5 @@
 import axios from 'axios';
+import toast from 'react-hot-toast';
 
 // node1 HTTP API — set VITE_API_BASE_URL in .env before building
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
@@ -7,6 +8,18 @@ const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 5000,
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.data?.error) {
+      toast.error(error.response.data.error);
+    } else if (error.message) {
+      toast.error(error.message);
+    }
+    return Promise.reject(error);
+  }
+);
 
 export const blockchainApi = {
   loginChallenge: async (address, publicKey) => {

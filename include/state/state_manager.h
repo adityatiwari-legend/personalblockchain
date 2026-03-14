@@ -23,6 +23,12 @@ namespace blockchain
     void applyBlock(const Block &block);
 
     /**
+     * Apply a confirmed block to balance/nonce/transaction state.
+     * This is shared by local mining and network block acceptance flows.
+     */
+    void applyBlockState(const Block &block);
+
+    /**
      * Check if a transaction would be a double-spend.
      * @param txID The transaction ID to check
      * @return true if this txID has already been spent

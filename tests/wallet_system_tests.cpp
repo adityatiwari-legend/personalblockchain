@@ -58,6 +58,20 @@ int main()
     Transaction replay = makeSignedTx(miner, receiverAddress, 1, 1);
     assert(!chain.addTransaction(replay));
 
+    // Test 5: receiver balance updates when a new network block is accepted
+    Blockchain peerChain(2, &pow, nullptr);
+    assert(peerChain.replaceChain(chain.getChain()));
+
+    Transaction networkTx = makeSignedTx(miner, receiverAddress, 7,
+                                         chain.getLastNonceForAddress(minerAddress) + 1);
+    assert(chain.addTransaction(networkTx));
+    Block propagatedBlock = chain.minePendingTransactions(minerAddress);
+
+    const uint64_t beforeNetworkAccept = peerChain.getBalanceForAddress(receiverAddress);
+    assert(peerChain.acceptBlock(propagatedBlock));
+    const uint64_t afterNetworkAccept = peerChain.getBalanceForAddress(receiverAddress);
+    assert(afterNetworkAccept >= beforeNetworkAccept + 7);
+
     std::cout << "wallet_system_tests passed" << std::endl;
     return 0;
 }

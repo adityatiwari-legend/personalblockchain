@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import WalletCard from '../components/WalletCard';
@@ -7,34 +8,64 @@ import BalanceCard from '../components/BalanceCard';
 import ReceivePanel from '../components/ReceivePanel';
 import TransactionTable from '../components/TransactionTable';
 import { blockchainApi } from '../services/api';
+import { useWalletStore } from '../store/useWalletStore';
 
 export default function WalletDashboard() {
   const navigate = useNavigate();
-  const session = JSON.parse(localStorage.getItem('walletSession') || '{}');
+  const queryClient = useQueryClient();
+  const { wallet, lockWallet } = useWalletStore();
+  const address = wallet?.address;
+  const prevChainUpdateRef = useRef();
+  const prevChainLengthRef = useRef();
 
-  const [balance, setBalance] = useState(0);
-  const [nextNonce, setNextNonce] = useState(1);
-  const [transactions, setTransactions] = useState([]);
-  const [health, setHealth] = useState({});
+  const { data: balanceData = { balance: 0, nextNonce: 1 } } = useQuery({
+    queryKey: ['balance', address],
+    queryFn: () => blockchainApi.getWalletBalance(address),
+    enabled: !!address
+  });
 
-  const refresh = async () => {
-    if (!session.address) return;
-    const [b, tx, h] = await Promise.all([
-      blockchainApi.getWalletBalance(session.address),
-      blockchainApi.getWalletTransactions(session.address),
-      blockchainApi.getHealth(),
-    ]);
-    setBalance(b.balance || 0);
-    setNextNonce(b.nextNonce || 1);
-    setTransactions(tx.transactions || []);
-    setHealth(h || {});
-  };
+  const { data: txData = { transactions: [] } } = useQuery({
+    queryKey: ['transactions', address],
+    queryFn: () => blockchainApi.getWalletTransactions(address),
+    enabled: !!address
+  });
+
+  const { data: health = {} } = useQuery({
+    queryKey: ['health'],
+    queryFn: () => blockchainApi.getHealth(),
+    refetchInterval: 3000
+  });
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 4000);
-    return () => clearInterval(t);
-  }, []);
+    if (!address) {
+      return;
+    }
+
+    const chainUpdateVersion = health?.chainUpdateVersion;
+    const chainLength = health?.chainLength;
+    const previousVersion = prevChainUpdateRef.current;
+    const previousLength = prevChainLengthRef.current;
+
+    if (previousVersion === undefined && previousLength === undefined) {
+      prevChainUpdateRef.current = chainUpdateVersion;
+      prevChainLengthRef.current = chainLength;
+      return;
+    }
+
+    const versionChanged = chainUpdateVersion !== undefined && chainUpdateVersion !== previousVersion;
+    const heightChanged = chainLength !== undefined && chainLength !== previousLength;
+
+    if (versionChanged || heightChanged) {
+      queryClient.invalidateQueries({ queryKey: ['balance', address] });
+      queryClient.invalidateQueries({ queryKey: ['transactions', address] });
+    }
+
+    prevChainUpdateRef.current = chainUpdateVersion;
+    prevChainLengthRef.current = chainLength;
+  }, [address, health?.chainLength, health?.chainUpdateVersion, queryClient]);
+
+  const transactions = useMemo(() => txData.transactions || [], [txData.transactions]);
+  const { balance, nextNonce } = balanceData;
 
   const rewards = useMemo(
     () => transactions.filter((t) => t.direction === 'reward').reduce((sum, t) => sum + Number(t.amount || 0), 0),
@@ -46,15 +77,21 @@ export default function WalletDashboard() {
     [transactions],
   );
 
-  const mine = async () => {
-    await blockchainApi.mineBlock(session.address);
-    await refresh();
-  };
+  const mineMutation = useMutation({
+    mutationFn: () => blockchainApi.mineBlock(address),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['balance', address]);
+      queryClient.invalidateQueries(['transactions', address]);
+      queryClient.invalidateQueries(['health']);
+    }
+  });
 
   const logout = () => {
-    localStorage.removeItem('walletSession');
+    lockWallet();
     navigate('/login');
   };
+
+  if (!wallet) return null;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_20%,#10243f_0%,#090f1a_40%,#05080f_100%)] text-white p-6 lg:p-8">
@@ -65,8 +102,11 @@ export default function WalletDashboard() {
             <p className="text-zinc-400 text-sm mt-1">Personalized account view with live chain updates</p>
           </div>
           <div className="flex gap-2">
+            <button className="btn-secondary" onClick={() => navigate('/explorer')}>Explorer</button>
             <button className="btn-secondary" onClick={() => navigate('/send')}>Send</button>
-            <button className="btn-primary" onClick={mine}>Mine 50 PCN</button>
+            <button className="btn-primary" onClick={() => mineMutation.mutate()} disabled={mineMutation.isPending}>
+              {mineMutation.isPending ? 'Mining...' : 'Mine 50 PCN'}
+            </button>
             <button className="btn-secondary" onClick={logout}>Logout</button>
           </div>
         </div>
@@ -97,8 +137,8 @@ export default function WalletDashboard() {
           </div>
 
           <div className="space-y-6">
-            <WalletCard address={session.address} publicKey={session.publicKey} />
-            <ReceivePanel address={session.address} />
+            <WalletCard address={wallet.address} publicKey={wallet.publicKey} />
+            <ReceivePanel address={wallet.address} />
             <div className="dashboard-card">
               <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/80 mb-3">Network Status</p>
               <p className="text-zinc-300 text-sm">Chain Height: <span className="text-white font-semibold">{health.chainLength ?? '-'}</span></p>

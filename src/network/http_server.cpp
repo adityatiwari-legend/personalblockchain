@@ -407,7 +407,6 @@ namespace blockchain
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"publicKey", wallet.getPublicKey()},
-                                    {"privateKey", wallet.getPrivateKey()},
                                     {"address", address}})
                         .dump(2);
         return resp;
@@ -792,6 +791,7 @@ namespace blockchain
         nlohmann::json j;
         j["status"] = "ok";
         j["chainLength"] = blockchain_.getChainLength();
+        j["chainUpdateVersion"] = blockchain_.getChainUpdateVersion();
         j["difficulty"] = blockchain_.getDifficulty();
         j["peerCount"] = node_.getPeerList().size();
         j["mempoolSize"] = blockchain_.getMempool().size();

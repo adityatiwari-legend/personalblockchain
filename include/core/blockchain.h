@@ -66,6 +66,12 @@ namespace blockchain
      */
     bool replaceChain(const std::vector<Block> &newChain);
 
+    /**
+     * Accept and append a validated next block from the network.
+     * @return true if block was appended and state updated
+     */
+    bool acceptBlock(const Block &block);
+
     /** Get the full chain. */
     std::vector<Block> getChain() const;
 
@@ -77,6 +83,9 @@ namespace blockchain
 
     /** Get chain length. */
     size_t getChainLength() const;
+
+    /** Monotonic chain update version for observer refresh triggers. */
+    uint64_t getChainUpdateVersion() const;
 
     /** Get confirmed balance for a wallet address. */
     uint64_t getBalanceForAddress(const std::string &address) const;
@@ -98,6 +107,9 @@ namespace blockchain
 
     /** Set callback for when a new block is added. */
     void setOnBlockAdded(std::function<void(const Block &)> callback);
+
+    /** Set callback for when a block is accepted into canonical chain state. */
+    void setOnBlockAccepted(std::function<void(const Block &)> callback);
 
     /** Set callback for when a new transaction is added to mempool. */
     void setOnTransactionAdded(std::function<void(const Transaction &)> callback);
@@ -126,7 +138,13 @@ namespace blockchain
 
     // Event callbacks
     std::function<void(const Block &)> onBlockAdded_;
+    std::function<void(const Block &)> onBlockAccepted_;
     std::function<void(const Transaction &)> onTransactionAdded_;
+
+    uint64_t chainUpdateVersion_ = 0;
+
+    /** Apply block effects into state manager. */
+    void applyBlockState(const Block &block);
 
     /** Check if a transaction already exists in the mempool. */
     bool isInMempool(const std::string &txID) const;

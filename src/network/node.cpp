@@ -559,8 +559,7 @@ namespace blockchain
             bool accepted = false;
             if (block.index == chain.size() && block.previousHash == chain.back().hash)
             {
-              chain.push_back(block);
-              accepted = blockchain_.replaceChain(chain);
+              accepted = blockchain_.acceptBlock(block);
             }
             else if (block.index >= chain.size())
             {

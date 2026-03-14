@@ -1,42 +1,43 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import SendForm from '../components/SendForm';
 import TransactionTable from '../components/TransactionTable';
 import { blockchainApi } from '../services/api';
 import { computeTransactionId, currentUtcNoZ, signMessage } from '../services/walletCrypto';
+import { useWalletStore } from '../store/useWalletStore';
 
 export default function Send() {
   const navigate = useNavigate();
-  const session = JSON.parse(localStorage.getItem('walletSession') || '{}');
-  const [nextNonce, setNextNonce] = useState(1);
-  const [history, setHistory] = useState([]);
+  const queryClient = useQueryClient();
+  const { wallet } = useWalletStore();
+  const address = wallet?.address;
+
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
-  const refresh = async () => {
-    if (!session.address) return;
-    const [balance, txs] = await Promise.all([
-      blockchainApi.getWalletBalance(session.address),
-      blockchainApi.getWalletTransactions(session.address),
-    ]);
-    setNextNonce(balance.nextNonce || 1);
-    setHistory((txs.transactions || []).slice().reverse());
-  };
+  const { data: balanceData = { nextNonce: 1 } } = useQuery({
+    queryKey: ['balance', address],
+    queryFn: () => blockchainApi.getWalletBalance(address),
+    enabled: !!address,
+  });
 
-  useEffect(() => {
-    refresh();
-  }, []);
+  const { data: txData = { transactions: [] } } = useQuery({
+    queryKey: ['transactions', address],
+    queryFn: () => blockchainApi.getWalletTransactions(address),
+    enabled: !!address,
+  });
 
-  const onSubmit = async ({ toAddress, amount, payload, nonce }) => {
-    try {
-      setSending(true);
-      setError('');
+  const history = (txData.transactions || []).slice().reverse();
+  const nextNonce = balanceData.nextNonce || 1;
 
+  const sendMutation = useMutation({
+    mutationFn: async ({ toAddress, amount, payload, nonce }) => {
       const tx = {
-        fromAddress: session.address,
+        fromAddress: wallet.address,
         toAddress,
-        senderPublicKey: session.publicKey,
+        senderPublicKey: wallet.publicKey,
         receiverPublicKey: '',
         amount,
         nonce,
@@ -45,10 +46,21 @@ export default function Send() {
       };
 
       tx.txID = await computeTransactionId(tx);
-      tx.signature = await signMessage(session.privateKey, tx.txID);
+      tx.signature = await signMessage(wallet.privateKey, tx.txID);
 
-      await blockchainApi.sendTransaction(tx);
-      await refresh();
+      return blockchainApi.sendTransaction(tx);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['balance', address]);
+      queryClient.invalidateQueries(['transactions', address]);
+    }
+  });
+
+  const onSubmit = async (formData) => {
+    try {
+      setSending(true);
+      setError('');
+      await sendMutation.mutateAsync(formData);
     } catch (e) {
       setError(e?.response?.data?.error || e.message || 'Transaction failed');
     } finally {
@@ -56,13 +68,15 @@ export default function Send() {
     }
   };
 
+  if (!wallet) return null;
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#122949_0%,#0a0f18_45%,#05080e_100%)] text-white p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-black tracking-tight">Send Transaction</h1>
-            <p className="text-zinc-400 text-sm">Sign locally. Private key never leaves browser storage.</p>
+            <p className="text-zinc-400 text-sm">Sign locally. Private key never leaves browser memory.</p>
           </div>
           <button className="btn-secondary" onClick={() => navigate('/')}>Back</button>
         </div>

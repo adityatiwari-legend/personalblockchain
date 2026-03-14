@@ -35,6 +35,7 @@ namespace blockchain
       {
         chain_ = std::move(loaded);
         stateManager_.rebuildState(chain_);
+        chainUpdateVersion_ = 1;
         std::cout << "[Blockchain] Loaded " << chain_.size()
                   << " blocks from disk. Tip: " << chain_.back().hash << std::endl;
         return;
@@ -49,7 +50,8 @@ namespace blockchain
 
     Block genesis = Block::createGenesis(difficulty);
     chain_.push_back(genesis);
-    stateManager_.applyBlock(genesis);
+    applyBlockState(genesis);
+    chainUpdateVersion_ = 1;
 
     // Persist genesis block
     if (storage_)
@@ -203,7 +205,7 @@ namespace blockchain
     chain_.push_back(newBlock);
 
     // Update state
-    stateManager_.applyBlock(newBlock);
+    applyBlockState(newBlock);
 
     // Remove mined transactions from mempool
     if (txCount >= mempool_.size())
@@ -229,7 +231,63 @@ namespace blockchain
       onBlockAdded_(newBlock);
     }
 
+    if (onBlockAccepted_)
+    {
+      onBlockAccepted_(newBlock);
+    }
+
     return newBlock;
+  }
+
+  bool Blockchain::acceptBlock(const Block &block)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (chain_.empty())
+    {
+      return false;
+    }
+
+    if (block.index != chain_.size() || block.previousHash != chain_.back().hash)
+    {
+      return false;
+    }
+
+    std::vector<Block> candidate = chain_;
+    candidate.push_back(block);
+    if (!validateChainAgainstConsensus(candidate))
+    {
+      return false;
+    }
+
+    chain_.push_back(block);
+    applyBlockState(block);
+
+    mempool_.erase(
+        std::remove_if(
+            mempool_.begin(),
+            mempool_.end(),
+            [&block](const Transaction &pending)
+            {
+              return std::any_of(
+                  block.transactions.begin(),
+                  block.transactions.end(),
+                  [&pending](const Transaction &confirmed)
+                  { return confirmed.txID == pending.txID; });
+            }),
+        mempool_.end());
+
+    if (storage_)
+    {
+      storage_->appendBlock(block);
+    }
+
+    if (onBlockAccepted_)
+    {
+      onBlockAccepted_(block);
+    }
+
+    return true;
   }
 
   bool Blockchain::isChainValid() const
@@ -385,6 +443,7 @@ namespace blockchain
 
     // Rebuild state from new chain
     stateManager_.rebuildState(chain_);
+    ++chainUpdateVersion_;
 
     // Remove mempool transactions that are now in blocks
     auto spentTxIDs = stateManager_.getAllSpentTxIDs();
@@ -401,7 +460,18 @@ namespace blockchain
       storage_->saveChain(chain_);
     }
 
+    if (onBlockAccepted_ && !chain_.empty())
+    {
+      onBlockAccepted_(chain_.back());
+    }
+
     return true;
+  }
+
+  void Blockchain::applyBlockState(const Block &block)
+  {
+    stateManager_.applyBlockState(block);
+    ++chainUpdateVersion_;
   }
 
   void Blockchain::persistChain()
@@ -447,6 +517,12 @@ namespace blockchain
     return chain_.size();
   }
 
+  uint64_t Blockchain::getChainUpdateVersion() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return chainUpdateVersion_;
+  }
+
   uint64_t Blockchain::getBalanceForAddress(const std::string &address) const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -490,6 +566,11 @@ namespace blockchain
   void Blockchain::setOnBlockAdded(std::function<void(const Block &)> callback)
   {
     onBlockAdded_ = std::move(callback);
+  }
+
+  void Blockchain::setOnBlockAccepted(std::function<void(const Block &)> callback)
+  {
+    onBlockAccepted_ = std::move(callback);
   }
 
   void Blockchain::setOnTransactionAdded(
