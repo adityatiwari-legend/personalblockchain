@@ -59,6 +59,7 @@ if(BUILD_TESTS)
         src/block/block.cpp
         src/core/blockchain.cpp
         src/state/state_manager.cpp
+        src/storage/leveldb_manager.cpp
         src/transaction/transaction.cpp
         src/wallet/wallet.cpp
         src/crypto/sha256.cpp
