@@ -63,7 +63,7 @@ if(BUILD_TESTS)
         src/wallet/wallet.cpp
         src/crypto/sha256.cpp
         src/crypto/ecdsa.cpp
-        src/consensus/pow_engine.cpp
+        src/consensus/difficulty_adjuster.cpp
     )
 
     target_include_directories(wallet_system_tests PRIVATE
