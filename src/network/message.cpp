@@ -65,6 +65,14 @@ namespace blockchain
         return "REQUEST_PEERS";
       case MessageType::RESPONSE_PEERS:
         return "RESPONSE_PEERS";
+      case MessageType::NODE_ANNOUNCE:
+        return "NODE_ANNOUNCE";
+      case MessageType::REGISTER_NODE:
+        return "REGISTER_NODE";
+      case MessageType::REQUEST_BOOTSTRAP:
+        return "REQUEST_BOOTSTRAP";
+      case MessageType::RESPONSE_BOOTSTRAP:
+        return "RESPONSE_BOOTSTRAP";
       default:
         return "UNKNOWN";
       }
@@ -90,6 +98,14 @@ namespace blockchain
         return MessageType::REQUEST_PEERS;
       if (str == "RESPONSE_PEERS")
         return MessageType::RESPONSE_PEERS;
+      if (str == "NODE_ANNOUNCE")
+        return MessageType::NODE_ANNOUNCE;
+      if (str == "REGISTER_NODE")
+        return MessageType::REGISTER_NODE;
+      if (str == "REQUEST_BOOTSTRAP")
+        return MessageType::REQUEST_BOOTSTRAP;
+      if (str == "RESPONSE_BOOTSTRAP")
+        return MessageType::RESPONSE_BOOTSTRAP;
       return MessageType::UNKNOWN;
     }
 

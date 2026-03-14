@@ -1,30 +1,15 @@
-/**
- * PersonalBlockchain Node — Main Entry Point
- *
- * Usage:
- *   ./blockchain_node --port <p2p_port> --http-port <http_port>
- *       --peers <host1:port1,host2:port2,...> --difficulty <d>
- *       --data-dir <path> --consensus <pow>
- *
- * Example (local):
- *   ./blockchain_node --port 5000 --http-port 8000 --peers
- * 127.0.0.1:5001,127.0.0.1:5002
- *
- * Example (Docker):
- *   ./blockchain_node --port 5000 --http-port 8000 --peers
- * node2:5000,node3:5000 --data-dir /app/data
- */
-
 #include "consensus/pow_engine.h"
 #include "core/blockchain.h"
 #include "network/http_server.h"
 #include "network/node.h"
 #include "storage/leveldb_manager.h"
-#include "wallet/wallet.h"
+
+#include "utils/json.hpp"
 
 #include <atomic>
 #include <boost/asio.hpp>
 #include <csignal>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -35,7 +20,7 @@ static std::atomic<bool> running{true};
 static std::atomic<bool> shutdownRequested{false};
 static boost::asio::io_context *g_ioContext = nullptr;
 
-void signalHandler(int /*signal*/)
+void signalHandler(int)
 {
   shutdownRequested.store(true);
   running = false;
@@ -48,7 +33,7 @@ void signalHandler(int /*signal*/)
 struct PeerAddress
 {
   std::string host;
-  uint16_t port;
+  uint16_t port = 0;
 };
 
 struct Config
@@ -59,12 +44,181 @@ struct Config
   std::string dataDir = "./data";
   std::string consensus = "pow";
   std::string name = "PersonalBlockchain";
+  std::string configPath = "config.json";
+  std::string publicIp;
+
   std::vector<PeerAddress> peers;
+  std::vector<PeerAddress> bootstrapNodes;
+
+  size_t maxOutboundPeers = 8;
+  size_t maxInboundPeers = 32;
+
+  blockchain::network::NetworkTimeouts networkTimeouts;
+  blockchain::network::RetryPolicy retryPolicy;
 };
 
-Config parseArgs(int argc, char *argv[])
+static bool parseEndpoint(const std::string &entry, PeerAddress &out)
+{
+  if (entry.empty())
+  {
+    return false;
+  }
+
+  size_t colonPos = entry.rfind(':');
+  if (colonPos != std::string::npos && colonPos > 0)
+  {
+    out.host = entry.substr(0, colonPos);
+    out.port = static_cast<uint16_t>(std::stoi(entry.substr(colonPos + 1)));
+    return out.port > 0;
+  }
+
+  out.host = "127.0.0.1";
+  out.port = static_cast<uint16_t>(std::stoi(entry));
+  return out.port > 0;
+}
+
+static void parsePeerList(const std::string &peersStr, std::vector<PeerAddress> &target)
+{
+  std::istringstream ss(peersStr);
+  std::string peerEntry;
+  while (std::getline(ss, peerEntry, ','))
+  {
+    if (peerEntry.empty())
+    {
+      continue;
+    }
+
+    PeerAddress pa;
+    if (parseEndpoint(peerEntry, pa))
+    {
+      target.push_back(pa);
+    }
+  }
+}
+
+static void loadConfigFile(const std::string &configPath, Config &config)
+{
+  std::ifstream in(configPath);
+  if (!in.good())
+  {
+    return;
+  }
+
+  nlohmann::json j;
+  in >> j;
+
+  config.p2pPort = static_cast<uint16_t>(j.value("p2p_port", config.p2pPort));
+  config.httpPort = static_cast<uint16_t>(j.value("http_port", config.httpPort));
+  config.difficulty = static_cast<uint32_t>(j.value("difficulty", config.difficulty));
+  config.dataDir = j.value("data_dir", config.dataDir);
+  config.consensus = j.value("consensus", config.consensus);
+  config.name = j.value("name", config.name);
+  config.publicIp = j.value("public_ip", config.publicIp);
+
+  if (j.contains("bootstrap_nodes") && j["bootstrap_nodes"].is_array())
+  {
+    config.bootstrapNodes.clear();
+    for (const auto &item : j["bootstrap_nodes"])
+    {
+      if (!item.is_string())
+      {
+        continue;
+      }
+      PeerAddress pa;
+      if (parseEndpoint(item.get<std::string>(), pa))
+      {
+        config.bootstrapNodes.push_back(pa);
+      }
+    }
+  }
+
+  if (j.contains("seed_peers") && j["seed_peers"].is_array())
+  {
+    config.peers.clear();
+    for (const auto &item : j["seed_peers"])
+    {
+      if (!item.is_string())
+      {
+        continue;
+      }
+      PeerAddress pa;
+      if (parseEndpoint(item.get<std::string>(), pa))
+      {
+        config.peers.push_back(pa);
+      }
+    }
+  }
+  else if (j.contains("peers") && j["peers"].is_array())
+  {
+    config.peers.clear();
+    for (const auto &item : j["peers"])
+    {
+      if (!item.is_string())
+      {
+        continue;
+      }
+      PeerAddress pa;
+      if (parseEndpoint(item.get<std::string>(), pa))
+      {
+        config.peers.push_back(pa);
+      }
+    }
+  }
+
+  if (j.contains("peer_limits") && j["peer_limits"].is_object())
+  {
+    const auto &limits = j["peer_limits"];
+    config.maxOutboundPeers = limits.value("max_outbound_peers", config.maxOutboundPeers);
+    config.maxInboundPeers = limits.value("max_inbound_peers", config.maxInboundPeers);
+  }
+
+  if (j.contains("network_timeouts") && j["network_timeouts"].is_object())
+  {
+    const auto &t = j["network_timeouts"];
+    config.networkTimeouts.heartbeatIntervalSec =
+        t.value("heartbeat_interval_sec", config.networkTimeouts.heartbeatIntervalSec);
+    config.networkTimeouts.heartbeatTimeoutSec =
+        t.value("heartbeat_timeout_sec", config.networkTimeouts.heartbeatTimeoutSec);
+    config.networkTimeouts.gossipIntervalSec =
+        t.value("gossip_interval_sec", config.networkTimeouts.gossipIntervalSec);
+    config.networkTimeouts.peerRotationSec =
+        t.value("peer_rotation_sec", config.networkTimeouts.peerRotationSec);
+    config.networkTimeouts.quarantineSec =
+        t.value("quarantine_sec", config.networkTimeouts.quarantineSec);
+    config.networkTimeouts.dedupWindowSec =
+        t.value("dedup_window_sec", config.networkTimeouts.dedupWindowSec);
+  }
+
+  if (j.contains("retry_policy") && j["retry_policy"].is_object())
+  {
+    const auto &r = j["retry_policy"];
+    config.retryPolicy.maxRetries =
+        r.value("max_retries", config.retryPolicy.maxRetries);
+    config.retryPolicy.baseDelayMs =
+        r.value("base_delay_ms", config.retryPolicy.baseDelayMs);
+    config.retryPolicy.maxDelayMs =
+        r.value("max_delay_ms", config.retryPolicy.maxDelayMs);
+    config.retryPolicy.jitterMs =
+        r.value("jitter_ms", config.retryPolicy.jitterMs);
+    config.retryPolicy.reconnectCooldownMs =
+        r.value("reconnect_cooldown_ms", config.retryPolicy.reconnectCooldownMs);
+  }
+}
+
+static Config parseArgs(int argc, char *argv[])
 {
   Config config;
+
+  for (int i = 1; i < argc; i++)
+  {
+    std::string arg = argv[i];
+    if (arg == "--config" && i + 1 < argc)
+    {
+      config.configPath = argv[++i];
+    }
+  }
+
+  loadConfigFile(config.configPath, config);
 
   for (int i = 1; i < argc; i++)
   {
@@ -96,45 +250,44 @@ Config parseArgs(int argc, char *argv[])
     }
     else if (arg == "--peers" && i + 1 < argc)
     {
-      std::string peersStr = argv[++i];
-      std::istringstream ss(peersStr);
-      std::string peerEntry;
-      while (std::getline(ss, peerEntry, ','))
-      {
-        if (peerEntry.empty())
-          continue;
-        PeerAddress pa;
-        size_t colonPos = peerEntry.rfind(':');
-        if (colonPos != std::string::npos && colonPos > 0)
-        {
-          pa.host = peerEntry.substr(0, colonPos);
-          pa.port =
-              static_cast<uint16_t>(std::stoi(peerEntry.substr(colonPos + 1)));
-        }
-        else
-        {
-          pa.host = "127.0.0.1";
-          pa.port = static_cast<uint16_t>(std::stoi(peerEntry));
-        }
-        config.peers.push_back(pa);
-      }
+      parsePeerList(argv[++i], config.peers);
+    }
+    else if (arg == "--bootstrap" && i + 1 < argc)
+    {
+      config.bootstrapNodes.clear();
+      parsePeerList(argv[++i], config.bootstrapNodes);
+    }
+    else if (arg == "--public-ip" && i + 1 < argc)
+    {
+      config.publicIp = argv[++i];
+    }
+    else if (arg == "--max-outbound-peers" && i + 1 < argc)
+    {
+      config.maxOutboundPeers = static_cast<size_t>(std::stoul(argv[++i]));
+    }
+    else if (arg == "--max-inbound-peers" && i + 1 < argc)
+    {
+      config.maxInboundPeers = static_cast<size_t>(std::stoul(argv[++i]));
     }
     else if (arg == "--help" || arg == "-h")
     {
-      std::cout << "PersonalBlockchain Node v2.0.0\n"
+      std::cout << "PersonalBlockchain Node v3.0.0\n"
                 << "Usage: blockchain_node [options]\n\n"
                 << "Options:\n"
-                << "  --port <port>        P2P port (default: 5000)\n"
-                << "  --http-port <port>   HTTP API port (default: 8000)\n"
-                << "  --difficulty <d>     Mining difficulty (default: 2)\n"
-                << "  --data-dir <path>    Data directory (default: ./data)\n"
-                << "  --consensus <type>   Consensus engine: pow (default: pow)\n"
-                << "  --name <name>        Chain name (default: PersonalBlockchain)\n"
-                << "  --peers <addrs>      Comma-separated peer addresses\n"
-                << "                       Format: host:port or just port\n"
-                << "                       Example: node2:5000,node3:5000\n"
-                << "  --help               Show this help message\n";
-      exit(0);
+                << "  --config <path>                  Config file path (default: config.json)\n"
+                << "  --port <port>                    P2P port\n"
+                << "  --http-port <port>               HTTP API port\n"
+                << "  --difficulty <d>                 Mining difficulty\n"
+                << "  --data-dir <path>                Data directory\n"
+                << "  --consensus <type>               Consensus engine (pow)\n"
+                << "  --name <name>                    Chain name\n"
+                << "  --peers <host:port,...>          Seed peers\n"
+                << "  --bootstrap <host:port,...>      Bootstrap peers\n"
+                << "  --public-ip <ip-or-host>         Public endpoint host for NAT/public nodes\n"
+                << "  --max-outbound-peers <n>         Outbound peer cap\n"
+                << "  --max-inbound-peers <n>          Inbound peer cap\n"
+                << "  --help                           Show this help message\n";
+      std::exit(0);
     }
   }
 
@@ -149,81 +302,68 @@ int main(int argc, char *argv[])
   Config config = parseArgs(argc, argv);
 
   std::cout << "========================================\n"
-            << "  PersonalBlockchain Node v2.0.0\n"
+            << "  PersonalBlockchain Node v3.0.0\n"
             << "========================================\n"
+            << "  Config:      " << config.configPath << "\n"
             << "  P2P Port:    " << config.p2pPort << "\n"
             << "  HTTP Port:   " << config.httpPort << "\n"
             << "  Difficulty:  " << config.difficulty << "\n"
             << "  Data Dir:    " << config.dataDir << "\n"
-            << "  Consensus:   " << config.consensus << "\n"
-            << "  Chain Name:  " << config.name << "\n"
-            << "  Peers:       ";
-
-  if (config.peers.empty())
-  {
-    std::cout << "(none)";
-  }
-  else
-  {
-    for (size_t i = 0; i < config.peers.size(); i++)
-    {
-      if (i > 0)
-        std::cout << ", ";
-      std::cout << config.peers[i].host << ":" << config.peers[i].port;
-    }
-  }
-  std::cout << "\n========================================\n"
+            << "  Public IP:   " << (config.publicIp.empty() ? "(auto)" : config.publicIp) << "\n"
+            << "  Peer Limits: outbound=" << config.maxOutboundPeers
+            << ", inbound=" << config.maxInboundPeers << "\n"
+            << "========================================\n"
             << std::endl;
 
   try
   {
-    // Initialize persistent storage
     blockchain::storage::LevelDBManager storage(config.dataDir);
 
-    // Initialize consensus engine
     blockchain::consensus::PoWEngine powEngine;
     blockchain::consensus::IConsensusEngine *engine = &powEngine;
 
-    // Initialize blockchain with consensus engine + persistence
     blockchain::Blockchain chain(config.difficulty, engine, &storage);
 
-    // Initialize Boost ASIO
     boost::asio::io_context ioContext;
     g_ioContext = &ioContext;
 
-    // Start P2P node
-    blockchain::network::Node p2pNode(ioContext, chain, config.p2pPort);
+    blockchain::network::NodeOptions nodeOptions;
+    nodeOptions.dataDir = config.dataDir;
+    nodeOptions.publicIp = config.publicIp;
+    nodeOptions.maxOutboundPeers = config.maxOutboundPeers;
+    nodeOptions.maxInboundPeers = config.maxInboundPeers;
+    nodeOptions.timeouts = config.networkTimeouts;
+    nodeOptions.retryPolicy = config.retryPolicy;
+
+    for (const auto &peer : config.bootstrapNodes)
+    {
+      nodeOptions.bootstrapNodes.push_back(peer.host + ":" + std::to_string(peer.port));
+    }
+
+    blockchain::network::Node p2pNode(ioContext, chain, config.p2pPort, nodeOptions);
     p2pNode.start();
 
-    // Connect to peers
     for (const auto &peer : config.peers)
     {
       p2pNode.connectToPeer(peer.host, peer.port);
     }
 
-    // Start HTTP API server
     blockchain::network::HttpServer httpServer(ioContext, chain, p2pNode,
                                                config.httpPort);
     httpServer.start();
 
-    // Validate chain on startup
-    if (chain.isChainValid())
+    if (!chain.isChainValid())
     {
-      std::cout << "[Main] Chain validation: PASSED" << std::endl;
-    }
-    else
-    {
-      std::cerr << "[Main] Chain validation: FAILED" << std::endl;
+      std::cerr << "[Main] Chain validation failed" << std::endl;
       return 1;
     }
 
-    std::cout << "\n[Main] Node is running. Press Ctrl+C to stop.\n"
+    std::cout << "[Main] Node started\n"
               << "[Main] HTTP API: http://localhost:" << config.httpPort << "\n"
+              << "[Main] Network stats: /network/stats\n"
               << std::endl;
 
-    // Run I/O context in multiple threads for concurrency
-    unsigned int threadCount =
-        std::max(2u, std::thread::hardware_concurrency());
+    unsigned int threadCount = std::max(2u, std::thread::hardware_concurrency());
     std::vector<std::thread> threads;
     for (unsigned int i = 0; i < threadCount - 1; i++)
     {
@@ -231,20 +371,18 @@ int main(int argc, char *argv[])
                            { ioContext.run(); });
     }
 
-    // Main thread also runs the I/O context
     ioContext.run();
 
-    // Wait for threads
     for (auto &t : threads)
     {
       if (t.joinable())
+      {
         t.join();
+      }
     }
 
-    // Graceful shutdown: persist chain and state to disk
     if (shutdownRequested.load())
     {
-      std::cout << "[Main] Persisting chain to disk before shutdown..." << std::endl;
       chain.persistChain();
     }
   }
@@ -254,6 +392,5 @@ int main(int argc, char *argv[])
     return 1;
   }
 
-  std::cout << "[Main] Node stopped." << std::endl;
   return 0;
 }

@@ -271,6 +271,10 @@ namespace blockchain
       {
         return handleGetPeerScores();
       }
+      if (req.method == "GET" && req.path == "/network/stats")
+      {
+        return handleNetworkStats();
+      }
       if (req.method == "GET" && req.path == "/health")
       {
         return handleHealth();
@@ -574,6 +578,24 @@ namespace blockchain
 
         HttpResponse resp;
         resp.body = out.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleNetworkStats()
+    {
+      try
+      {
+        HttpResponse resp;
+        resp.body = node_.getNetworkStats().dump(2);
         return resp;
       }
       catch (const std::exception &e)

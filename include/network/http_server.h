@@ -71,6 +71,7 @@ namespace blockchain
       HttpResponse handleGetMempool();
       HttpResponse handleGetPeers();
       HttpResponse handleGetPeerScores();
+      HttpResponse handleNetworkStats();
       HttpResponse handleHealth();
 
       boost::asio::io_context &ioContext_;

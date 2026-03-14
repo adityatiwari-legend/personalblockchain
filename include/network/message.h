@@ -13,15 +13,19 @@ namespace blockchain
      */
     enum class MessageType
     {
-      NEW_TRANSACTION, // Broadcast a new transaction
-      NEW_BLOCK,       // Broadcast a newly mined block
-      REQUEST_CHAIN,   // Request the full chain from a peer
-      RESPONSE_CHAIN,  // Respond with the full chain
-      PING,            // Keep-alive ping
-      PONG,            // Keep-alive pong
-      PEER_LIST,       // Share known peers (legacy, kept for compat)
-      REQUEST_PEERS,   // Gossip: request peer list from a peer
-      RESPONSE_PEERS,  // Gossip: respond with known peer addresses
+      NEW_TRANSACTION,    // Broadcast a new transaction
+      NEW_BLOCK,          // Broadcast a newly mined block
+      REQUEST_CHAIN,      // Request the full chain from a peer
+      RESPONSE_CHAIN,     // Respond with the full chain
+      PING,               // Keep-alive ping
+      PONG,               // Keep-alive pong
+      PEER_LIST,          // Share known peers (legacy, kept for compat)
+      REQUEST_PEERS,      // Gossip: request peer list from a peer
+      RESPONSE_PEERS,     // Gossip: respond with known peer addresses
+      NODE_ANNOUNCE,      // Share node identity and public endpoint
+      REGISTER_NODE,      // Register with bootstrap node
+      REQUEST_BOOTSTRAP,  // Ask bootstrap node for known topology
+      RESPONSE_BOOTSTRAP, // Bootstrap response with peer topology
       UNKNOWN
     };
 

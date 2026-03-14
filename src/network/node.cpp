@@ -1,6 +1,10 @@
 #include "network/node.h"
+
+#include "crypto/sha256.h"
+
 #include <algorithm>
 #include <iostream>
+#include <random>
 
 namespace blockchain
 {
@@ -8,13 +12,23 @@ namespace blockchain
   {
 
     Node::Node(boost::asio::io_context &ioContext, Blockchain &blockchain,
-               uint16_t port)
+               uint16_t port, const NodeOptions &options)
         : ioContext_(ioContext),
           acceptor_(ioContext, tcp::endpoint(tcp::v4(), port)),
-          blockchain_(blockchain), port_(port)
+          blockchain_(blockchain),
+          port_(port),
+          options_(options),
+          nodeIdentity_(options.dataDir),
+          connectionManager_(options.maxOutboundPeers, options.maxInboundPeers)
     {
+      nodeIdentity_.loadOrCreate(port_, options_.publicIp);
 
-      // Set up blockchain callbacks for auto-broadcasting
+      for (const auto &bootstrap : options_.bootstrapNodes)
+      {
+        peerManager_.addKnownPeer(bootstrap);
+      }
+      bootstrapManager_.setBootstrapPeers(options_.bootstrapNodes);
+
       blockchain_.setOnBlockAdded(
           [this](const Block &block)
           { broadcastBlock(block); });
@@ -23,47 +37,105 @@ namespace blockchain
           [this](const Transaction &tx)
           { broadcastTransaction(tx); });
 
-      std::cout << "[Node] Listening on port " << port << std::endl;
+      std::cout << "[Node] Listening on port " << port_
+                << " with nodeId " << nodeIdentity_.record().nodeId.substr(0, 16)
+                << "..." << std::endl;
     }
 
     void Node::start()
     {
       doAccept();
-
-      // Start heartbeat and gossip timers
       startHeartbeatTimer();
       startGossipTimer();
+      startPeerRotationTimer();
+      connectToBootstrapPeers();
 
-      // Request chain from peers after a short delay
       auto timer = std::make_shared<boost::asio::steady_timer>(
           ioContext_, std::chrono::seconds(2));
       timer->async_wait([this, timer](boost::system::error_code ec)
                         {
-    if (!ec) {
-      requestChainFromPeers();
-    } });
+                          if (!ec)
+                          {
+                            requestChainFromPeers();
+                          } });
     }
 
-    void Node::connectToPeer(uint16_t port) { connectToPeer("127.0.0.1", port); }
+    void Node::connectToPeer(uint16_t port)
+    {
+      connectToPeer("127.0.0.1", port);
+    }
+
+    std::string Node::makeEndpoint(const std::string &host, uint16_t port) const
+    {
+      return host + ":" + std::to_string(port);
+    }
 
     void Node::connectToPeer(const std::string &host, uint16_t port, int retryCount)
     {
-      // Check if already connected
+      if (port == port_)
+      {
+        return;
+      }
+
+      const std::string endpoint = makeEndpoint(host, port);
       if (isAlreadyConnected(host, port))
       {
         return;
       }
 
+      if (!peerManager_.shouldAttemptConnection(endpoint, options_.retryPolicy.reconnectCooldownMs))
+      {
+        return;
+      }
+
+      if (peerManager_.isQuarantined(endpoint))
+      {
+        return;
+      }
+
+      if (peerScorer_.isBanned(endpoint))
+      {
+        return;
+      }
+
+      if (!connectionManager_.canAccept(ConnectionDirection::OUTBOUND))
+      {
+        const auto dropCandidate =
+            connectionManager_.selectLowestScorePeerToDrop(connectedPeerScores());
+
+        if (!dropCandidate.empty())
+        {
+          std::lock_guard<std::mutex> lock(peersMutex_);
+          for (auto &peer : peers_)
+          {
+            if (peer->getEndpoint() == dropCandidate)
+            {
+              std::cerr << "[Connection] Dropping low-score peer " << dropCandidate
+                        << " to free outbound slot" << std::endl;
+              peer->close();
+              break;
+            }
+          }
+        }
+
+        if (!connectionManager_.canAccept(ConnectionDirection::OUTBOUND))
+        {
+          networkMetrics_.incrementRejectedPeers();
+          return;
+        }
+      }
+
+      peerManager_.markDialAttempt(endpoint);
+
       auto resolver = std::make_shared<tcp::resolver>(ioContext_);
       resolver->async_resolve(
           host, std::to_string(port),
-          [this, resolver, host, port, retryCount](boost::system::error_code ec,
-                                                   tcp::resolver::results_type results)
+          [this, resolver, host, port, endpoint, retryCount](
+              boost::system::error_code ec,
+              tcp::resolver::results_type results)
           {
             if (ec)
             {
-              std::cerr << "[Node] Failed to resolve " << host << ":" << port
-                        << ": " << ec.message() << std::endl;
               retryConnect(host, port, retryCount);
               return;
             }
@@ -71,32 +143,15 @@ namespace blockchain
             auto socket = std::make_shared<tcp::socket>(ioContext_);
             boost::asio::async_connect(
                 *socket, results,
-                [this, socket, host, port, retryCount](boost::system::error_code ec,
-                                                       const tcp::endpoint & /*endpoint*/)
+                [this, socket, host, port, endpoint, retryCount](
+                    boost::system::error_code ec,
+                    const tcp::endpoint &)
                 {
                   if (ec)
                   {
-                    std::cerr << "[Node] Failed to connect to " << host << ":"
-                              << port << ": " << ec.message() << std::endl;
                     retryConnect(host, port, retryCount);
                     return;
                   }
-
-                  // Enforce MAX_PEERS
-                  {
-                    std::lock_guard<std::mutex> lock(peersMutex_);
-                    if (peers_.size() >= MAX_PEERS)
-                    {
-                      std::cerr << "[Node] MAX_PEERS reached, dropping new connection to "
-                                << host << ":" << port << std::endl;
-                      boost::system::error_code shutEc;
-                      socket->shutdown(tcp::socket::shutdown_both, shutEc);
-                      return;
-                    }
-                  }
-
-                  std::cout << "[Node] Connected to peer " << host << ":" << port
-                            << std::endl;
 
                   auto peer = std::make_shared<Peer>(
                       std::move(*socket),
@@ -106,47 +161,75 @@ namespace blockchain
                       });
 
                   peer->setListenPort(port);
-
-                  // Register peer in scorer
                   peerScorer_.addPeer(host, port);
+                  peerManager_.addKnownPeer(endpoint);
+                  bootstrapManager_.registerPeer(endpoint);
 
                   {
                     std::lock_guard<std::mutex> lock(peersMutex_);
                     peers_.push_back(peer);
                   }
 
+                  connectionManager_.registerConnection(endpoint, ConnectionDirection::OUTBOUND);
                   peer->start();
 
-                  // Request chain from this new peer
+                  sendNodeAnnounce(peer);
+
+                  Message registerMsg;
+                  registerMsg.type = MessageType::REGISTER_NODE;
+                  registerMsg.payload = {
+                      {"endpoint", nodeIdentity_.endpoint()},
+                      {"nodeId", nodeIdentity_.record().nodeId}};
+                  peer->send(registerMsg);
+
+                  Message bootstrapReq;
+                  bootstrapReq.type = MessageType::REQUEST_BOOTSTRAP;
+                  bootstrapReq.payload = nlohmann::json::object();
+                  peer->send(bootstrapReq);
+
+                  Message reqPeers;
+                  reqPeers.type = MessageType::REQUEST_PEERS;
+                  reqPeers.payload = {
+                      {"requester", nodeIdentity_.endpoint()},
+                      {"nodeId", nodeIdentity_.record().nodeId}};
+                  peer->send(reqPeers);
+
                   Message reqChain;
                   reqChain.type = MessageType::REQUEST_CHAIN;
                   reqChain.payload = nlohmann::json::object();
                   peer->send(reqChain);
+
+                  refreshMetrics();
                 });
           });
     }
 
     void Node::retryConnect(const std::string &host, uint16_t port, int retryCount)
     {
-      static const int MAX_RETRIES = 5;
-      if (retryCount >= MAX_RETRIES)
+      if (retryCount >= options_.retryPolicy.maxRetries)
       {
-        std::cerr << "[Node] Max retries reached for " << host << ":" << port
-                  << ". Giving up." << std::endl;
+        const std::string endpoint = makeEndpoint(host, port);
+        peerManager_.quarantinePeer(endpoint, options_.timeouts.quarantineSec);
         return;
       }
-      int delaySec = std::min(2 << retryCount, 30);
-      std::cout << "[Node] Retrying connection to " << host << ":" << port
-                << " in " << delaySec << "s (attempt " << (retryCount + 1)
-                << "/" << MAX_RETRIES << ")" << std::endl;
+
+      const int base = options_.retryPolicy.baseDelayMs;
+      const int maxDelay = options_.retryPolicy.maxDelayMs;
+      int delayMs = std::min(base * (1 << retryCount), maxDelay);
+
+      std::random_device rd;
+      std::mt19937 gen(rd());
+      std::uniform_int_distribution<> jitterDist(0, std::max(0, options_.retryPolicy.jitterMs));
+      delayMs += jitterDist(gen);
 
       auto timer = std::make_shared<boost::asio::steady_timer>(
-          ioContext_, std::chrono::seconds(delaySec));
+          ioContext_, std::chrono::milliseconds(delayMs));
       timer->async_wait([this, timer, host, port, retryCount](boost::system::error_code ec)
                         {
-    if (!ec) {
-      connectToPeer(host, port, retryCount + 1);
-    } });
+                          if (!ec)
+                          {
+                            connectToPeer(host, port, retryCount + 1);
+                          } });
     }
 
     void Node::broadcastTransaction(const Transaction &tx)
@@ -154,7 +237,9 @@ namespace blockchain
       {
         std::lock_guard<std::mutex> lock(seenMutex_);
         if (seenTxIDs_.count(tx.txID))
+        {
           return;
+        }
         seenTxIDs_.insert(tx.txID);
         while (seenTxIDs_.size() > 10000)
         {
@@ -173,7 +258,9 @@ namespace blockchain
       {
         std::lock_guard<std::mutex> lock(seenMutex_);
         if (seenBlockHashes_.count(block.hash))
+        {
           return;
+        }
         seenBlockHashes_.insert(block.hash);
         while (seenBlockHashes_.size() > 1000)
         {
@@ -209,33 +296,58 @@ namespace blockchain
       return list;
     }
 
+    nlohmann::json Node::getNodeIdentity() const
+    {
+      return nodeIdentity_.toJson();
+    }
+
+    nlohmann::json Node::getNetworkStats() const
+    {
+      auto stats = networkMetrics_.toJson();
+      stats["node"] = nodeIdentity_.toJson();
+      stats["connectionLimits"] = {
+          {"maxOutboundPeers", options_.maxOutboundPeers},
+          {"maxInboundPeers", options_.maxInboundPeers},
+          {"currentOutboundPeers", connectionManager_.outboundCount()},
+          {"currentInboundPeers", connectionManager_.inboundCount()}};
+      stats["quarantinedPeers"] = peerManager_.quarantinedPeerCount();
+      return stats;
+    }
+
     void Node::doAccept()
     {
       acceptor_.async_accept(
           [this](boost::system::error_code ec, tcp::socket socket)
           {
-            if (ec)
+            if (!ec)
             {
-              std::cerr << "[Node] Accept error: " << ec.message() << std::endl;
-            }
-            else
-            {
-              // Enforce MAX_PEERS limit
+              if (!connectionManager_.canAccept(ConnectionDirection::INBOUND))
               {
-                std::lock_guard<std::mutex> lock(peersMutex_);
-                if (peers_.size() >= MAX_PEERS)
+                const auto dropCandidate =
+                    connectionManager_.selectLowestScorePeerToDrop(connectedPeerScores());
+                if (!dropCandidate.empty())
                 {
-                  std::cerr << "[Node] MAX_PEERS reached, rejecting incoming connection" << std::endl;
-                  boost::system::error_code shutEc;
-                  socket.shutdown(tcp::socket::shutdown_both, shutEc);
-                  doAccept();
-                  return;
+                  std::lock_guard<std::mutex> lock(peersMutex_);
+                  for (auto &peer : peers_)
+                  {
+                    if (peer->getEndpoint() == dropCandidate)
+                    {
+                      peer->close();
+                      break;
+                    }
+                  }
                 }
               }
 
-              std::cout << "[Node] Incoming connection from "
-                        << socket.remote_endpoint().address().to_string() << ":"
-                        << socket.remote_endpoint().port() << std::endl;
+              if (!connectionManager_.canAccept(ConnectionDirection::INBOUND))
+              {
+                networkMetrics_.incrementRejectedPeers();
+                boost::system::error_code shutEc;
+                socket.shutdown(tcp::socket::shutdown_both, shutEc);
+                socket.close(shutEc);
+                doAccept();
+                return;
+              }
 
               auto peer = std::make_shared<Peer>(
                   std::move(socket),
@@ -244,48 +356,141 @@ namespace blockchain
                     handleMessage(p, msg);
                   });
 
+              const std::string endpoint = peer->getEndpoint();
+              peerManager_.addKnownPeer(endpoint);
+              bootstrapManager_.registerPeer(endpoint);
+              connectionManager_.registerConnection(endpoint, ConnectionDirection::INBOUND);
+
               {
                 std::lock_guard<std::mutex> lock(peersMutex_);
                 peers_.push_back(peer);
               }
 
               peer->start();
+              sendNodeAnnounce(peer);
+              refreshMetrics();
             }
-
             doAccept();
           });
+    }
+
+    void Node::sendNodeAnnounce(std::shared_ptr<Peer> peer)
+    {
+      Message announce;
+      announce.type = MessageType::NODE_ANNOUNCE;
+      announce.payload = {
+          {"nodeId", nodeIdentity_.record().nodeId},
+          {"publicKey", nodeIdentity_.record().publicKey},
+          {"publicIp", nodeIdentity_.record().advertisedIp},
+          {"port", port_},
+          {"endpoint", nodeIdentity_.endpoint()}};
+      peer->send(announce);
     }
 
     void Node::handleMessage(std::shared_ptr<Peer> peer, const Message &msg)
     {
       const std::string peerKey = peer->getEndpoint();
-      const auto peerPort = peer->getListenPort() > 0 ? peer->getListenPort() : peer->getPort();
-      const size_t sep = peerKey.rfind(':');
-      if (sep != std::string::npos && sep > 0)
-      {
-        peerScorer_.addPeer(peerKey.substr(0, sep), peerPort);
-      }
 
-      // Rate limiting
-      if (peer->isRateLimited(50))
-      {
-        std::cerr << "[Node] Rate limiting peer " << peer->getEndpoint()
-                  << std::endl;
-        return;
-      }
-
-      // Check ban status
       if (peerScorer_.isBanned(peerKey))
       {
-        std::cerr << "[Node] Ignoring message from banned peer " << peerKey << std::endl;
+        removePeer(peer, true);
         return;
       }
 
-      // Mark peer as seen
+      if (peer->isRateLimited(100))
+      {
+        penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_TX);
+        return;
+      }
+
+      const auto now = std::chrono::steady_clock::now();
+      if (msg.type != MessageType::PING && msg.type != MessageType::PONG)
+      {
+        std::lock_guard<std::mutex> lock(seenMutex_);
+        const std::string dedupKey = std::to_string(static_cast<int>(msg.type)) +
+                                     ":" + crypto::sha256(msg.payload.dump());
+        auto it = messageDedup_.find(dedupKey);
+        if (it != messageDedup_.end())
+        {
+          const auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+          if (age < options_.timeouts.dedupWindowSec)
+          {
+            return;
+          }
+        }
+        messageDedup_[dedupKey] = now;
+        for (auto iter = messageDedup_.begin(); iter != messageDedup_.end();)
+        {
+          const auto age = std::chrono::duration_cast<std::chrono::seconds>(now - iter->second).count();
+          if (age > options_.timeouts.dedupWindowSec)
+          {
+            iter = messageDedup_.erase(iter);
+          }
+          else
+          {
+            ++iter;
+          }
+        }
+      }
+
       peerScorer_.markSeen(peerKey);
 
       switch (msg.type)
       {
+      case MessageType::NODE_ANNOUNCE:
+      {
+        const std::string publicIp = msg.payload.value("publicIp", "");
+        const uint16_t peerPort = static_cast<uint16_t>(msg.payload.value("port", 0));
+        const std::string endpoint = msg.payload.value("endpoint", "");
+
+        if (!publicIp.empty() && peerPort > 0)
+        {
+          peer->setListenPort(peerPort);
+          peerScorer_.addPeer(publicIp, peerPort);
+          peerManager_.addKnownPeer(makeEndpoint(publicIp, peerPort));
+          bootstrapManager_.registerPeer(makeEndpoint(publicIp, peerPort));
+        }
+
+        if (!endpoint.empty())
+        {
+          peerManager_.addKnownPeer(endpoint);
+          bootstrapManager_.registerPeer(endpoint);
+        }
+
+        break;
+      }
+
+      case MessageType::REGISTER_NODE:
+      {
+        const std::string endpoint = msg.payload.value("endpoint", "");
+        if (!endpoint.empty())
+        {
+          bootstrapManager_.registerPeer(endpoint);
+          peerManager_.addKnownPeer(endpoint);
+        }
+
+        Message resp;
+        resp.type = MessageType::RESPONSE_BOOTSTRAP;
+        resp.payload = bootstrapManager_.knownTopology(512);
+        peer->send(resp);
+        break;
+      }
+
+      case MessageType::REQUEST_BOOTSTRAP:
+      {
+        Message resp;
+        resp.type = MessageType::RESPONSE_BOOTSTRAP;
+        resp.payload = bootstrapManager_.knownTopology(512);
+        peer->send(resp);
+        break;
+      }
+
+      case MessageType::RESPONSE_BOOTSTRAP:
+      {
+        handleReceivedPeers(msg.payload);
+        break;
+      }
+
       case MessageType::NEW_TRANSACTION:
       {
         try
@@ -307,7 +512,7 @@ namespace blockchain
 
           if (!alreadySeen)
           {
-            bool accepted = blockchain_.addTransaction(tx);
+            const bool accepted = blockchain_.addTransaction(tx);
             if (accepted)
             {
               rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_TX);
@@ -322,10 +527,8 @@ namespace blockchain
             }
           }
         }
-        catch (const std::exception &e)
+        catch (...)
         {
-          std::cerr << "[Node] Failed to parse transaction: " << e.what()
-                    << std::endl;
           penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_TX);
         }
         break;
@@ -354,9 +557,7 @@ namespace blockchain
           {
             auto chain = blockchain_.getChain();
             bool accepted = false;
-
-            if (block.index == chain.size() &&
-                block.previousHash == chain.back().hash)
+            if (block.index == chain.size() && block.previousHash == chain.back().hash)
             {
               chain.push_back(block);
               accepted = blockchain_.replaceChain(chain);
@@ -369,7 +570,6 @@ namespace blockchain
               peer->send(req);
             }
 
-            // Only re-broadcast AFTER validation succeeds
             if (accepted)
             {
               rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_BLOCK);
@@ -380,9 +580,8 @@ namespace blockchain
             }
           }
         }
-        catch (const std::exception &e)
+        catch (...)
         {
-          std::cerr << "[Node] Failed to parse block: " << e.what() << std::endl;
           penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_BLOCK);
         }
         break;
@@ -411,9 +610,8 @@ namespace blockchain
             rewardPeerByEndpoint(peerKey, PeerScorer::REWARD_VALID_BLOCK);
           }
         }
-        catch (const std::exception &e)
+        catch (...)
         {
-          std::cerr << "[Node] Failed to parse chain: " << e.what() << std::endl;
           penalizePeerByEndpoint(peerKey, PeerScorer::PENALTY_INVALID_BLOCK);
         }
         break;
@@ -434,25 +632,25 @@ namespace blockchain
 
       case MessageType::REQUEST_PEERS:
       {
-        auto shareablePeers = peerScorer_.getShareablePeers();
-        nlohmann::json peerArray = nlohmann::json::array();
-        for (const auto &p : shareablePeers)
+        std::vector<std::string> peers = peerManager_.getKnownPeers();
+        peers.push_back(nodeIdentity_.endpoint());
+
+        for (const auto &bootstrap : bootstrapManager_.knownTopology(256))
         {
-          peerArray.push_back(p);
+          peers.push_back(bootstrap);
         }
+
+        std::sort(peers.begin(), peers.end());
+        peers.erase(std::unique(peers.begin(), peers.end()), peers.end());
+
         Message resp;
         resp.type = MessageType::RESPONSE_PEERS;
-        resp.payload = peerArray;
+        resp.payload = peers;
         peer->send(resp);
         break;
       }
 
       case MessageType::RESPONSE_PEERS:
-      {
-        handleReceivedPeers(msg.payload);
-        break;
-      }
-
       case MessageType::PEER_LIST:
       {
         handleReceivedPeers(msg.payload);
@@ -460,14 +658,23 @@ namespace blockchain
       }
 
       default:
-        std::cerr << "[Node] Unknown message type from " << peer->getEndpoint()
-                  << std::endl;
         break;
       }
+
+      refreshMetrics();
     }
 
-    void Node::removePeer(std::shared_ptr<Peer> peer)
+    void Node::removePeer(std::shared_ptr<Peer> peer, bool quarantine)
     {
+      const std::string endpoint = peer->getEndpoint();
+
+      if (quarantine)
+      {
+        peerManager_.quarantinePeer(endpoint, options_.timeouts.quarantineSec);
+      }
+
+      connectionManager_.unregisterConnection(endpoint);
+
       std::lock_guard<std::mutex> lock(peersMutex_);
       peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
                                   [&peer](const std::shared_ptr<Peer> &p)
@@ -475,6 +682,8 @@ namespace blockchain
                                     return p == peer || !p->isConnected();
                                   }),
                    peers_.end());
+
+      refreshMetrics();
     }
 
     void Node::broadcast(const Message &msg, std::shared_ptr<Peer> exclude)
@@ -489,139 +698,243 @@ namespace blockchain
       }
     }
 
-    // ─── Gossip-based peer discovery ────────────────────────────────────
-
     void Node::requestPeersFromAll()
     {
       Message msg;
       msg.type = MessageType::REQUEST_PEERS;
-      msg.payload = nlohmann::json::object();
+      msg.payload = {
+          {"requester", nodeIdentity_.endpoint()},
+          {"nodeId", nodeIdentity_.record().nodeId}};
       broadcast(msg);
     }
 
     void Node::handleReceivedPeers(const nlohmann::json &payload)
     {
       if (!payload.is_array())
+      {
         return;
+      }
 
+      std::vector<std::string> discovered;
       for (const auto &entry : payload)
       {
         if (!entry.is_string())
-          continue;
-
-        std::string peerAddr = entry.get<std::string>();
-        size_t colonPos = peerAddr.rfind(':');
-        if (colonPos == std::string::npos || colonPos == 0)
-          continue;
-
-        std::string host = peerAddr.substr(0, colonPos);
-        uint16_t port = 0;
-        try
         {
-          port = static_cast<uint16_t>(std::stoi(peerAddr.substr(colonPos + 1)));
+          continue;
         }
-        catch (...)
+
+        const std::string endpoint = entry.get<std::string>();
+        if (endpoint.empty() || endpoint == nodeIdentity_.endpoint())
+        {
+          continue;
+        }
+
+        std::string host;
+        uint16_t port = 0;
+        if (!PeerManager::parseEndpoint(endpoint, host, port))
         {
           continue;
         }
 
         if (port == port_)
+        {
           continue;
-        if (isAlreadyConnected(host, port))
-          continue;
-        if (peerScorer_.isBanned(host + ":" + std::to_string(port)))
-          continue;
+        }
 
-        std::cout << "[Gossip] Discovered new peer: " << host << ":" << port << std::endl;
-        connectToPeer(host, port);
+        if (peerScorer_.isBanned(endpoint) || peerManager_.isQuarantined(endpoint))
+        {
+          continue;
+        }
+
+        discovered.push_back(endpoint);
       }
+
+      peerManager_.mergeKnownPeers(discovered);
+      for (const auto &peer : discovered)
+      {
+        bootstrapManager_.registerPeer(peer);
+      }
+
+      attemptRandomPeerExpansion();
+      refreshMetrics();
     }
 
     void Node::startGossipTimer()
     {
       auto timer = std::make_shared<boost::asio::steady_timer>(
-          ioContext_, std::chrono::seconds(30));
+          ioContext_, std::chrono::seconds(options_.timeouts.gossipIntervalSec));
       timer->async_wait([this, timer](boost::system::error_code ec)
                         {
-        if (!ec)
-        {
-          requestPeersFromAll();
-          peerScorer_.evictStalePeers(300);
-          startGossipTimer();
-        } });
+                          if (!ec)
+                          {
+                            requestPeersFromAll();
+                            attemptRandomPeerExpansion();
+                            peerScorer_.evictStalePeers(300);
+                            refreshMetrics();
+                            startGossipTimer();
+                          } });
     }
 
-    // ─── Heartbeat / PING-PONG ──────────────────────────────────────────
+    void Node::startPeerRotationTimer()
+    {
+      auto timer = std::make_shared<boost::asio::steady_timer>(
+          ioContext_, std::chrono::seconds(options_.timeouts.peerRotationSec));
+      timer->async_wait([this, timer](boost::system::error_code ec)
+                        {
+                          if (!ec)
+                          {
+                            attemptRandomPeerExpansion();
+                            startPeerRotationTimer();
+                          } });
+    }
+
+    void Node::connectToBootstrapPeers()
+    {
+      for (const auto &endpoint : bootstrapManager_.bootstrapPeers())
+      {
+        std::string host;
+        uint16_t port = 0;
+        if (!PeerManager::parseEndpoint(endpoint, host, port))
+        {
+          continue;
+        }
+
+        connectToPeer(host, port);
+      }
+    }
+
+    void Node::attemptRandomPeerExpansion()
+    {
+      const size_t outboundCount = connectionManager_.outboundCount();
+      if (outboundCount >= options_.maxOutboundPeers)
+      {
+        return;
+      }
+
+      std::vector<std::string> exclude = getPeerList();
+      exclude.push_back(nodeIdentity_.endpoint());
+
+      const size_t needed = options_.maxOutboundPeers - outboundCount;
+      const auto peers = peerManager_.getRandomPeers(std::max<size_t>(needed, 2), exclude);
+
+      for (const auto &endpoint : peers)
+      {
+        std::string host;
+        uint16_t port = 0;
+        if (!PeerManager::parseEndpoint(endpoint, host, port))
+        {
+          continue;
+        }
+
+        connectToPeer(host, port);
+      }
+    }
 
     void Node::startHeartbeatTimer()
     {
       auto timer = std::make_shared<boost::asio::steady_timer>(
-          ioContext_, std::chrono::seconds(15));
+          ioContext_, std::chrono::seconds(options_.timeouts.heartbeatIntervalSec));
       timer->async_wait([this, timer](boost::system::error_code ec)
                         {
-        if (!ec)
-        {
-          Message ping;
-          ping.type = MessageType::PING;
-          ping.payload = nlohmann::json::object();
+                          if (!ec)
+                          {
+                            Message ping;
+                            ping.type = MessageType::PING;
+                            ping.payload = nlohmann::json::object();
 
-          {
-            std::lock_guard<std::mutex> lock(peersMutex_);
-            // Clean up disconnected peers
-            peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
-                                        [](const std::shared_ptr<Peer> &p)
-                                        {
-                                          return !p->isConnected();
-                                        }),
-                         peers_.end());
+                            std::vector<std::shared_ptr<Peer>> snapshot;
+                            {
+                              std::lock_guard<std::mutex> lock(peersMutex_);
+                              peers_.erase(std::remove_if(peers_.begin(), peers_.end(),
+                                                          [this](const std::shared_ptr<Peer> &p)
+                                                          {
+                                                            if (!p->isConnected())
+                                                            {
+                                                              connectionManager_.unregisterConnection(p->getEndpoint());
+                                                              return true;
+                                                            }
+                                                            return false;
+                                                          }),
+                                           peers_.end());
+                              snapshot = peers_;
+                            }
 
-            for (auto &peer : peers_)
-            {
-              peerScorer_.markPingSent(peer->getEndpoint());
-              peer->send(ping);
-            }
-          }
+                            for (auto &peer : snapshot)
+                            {
+                              peerScorer_.markPingSent(peer->getEndpoint());
+                              peer->send(ping);
+                            }
 
-          auto timedOutPeers = peerScorer_.getHeartbeatTimeoutPeers(45);
-          if (!timedOutPeers.empty())
-          {
-            std::lock_guard<std::mutex> lock(peersMutex_);
-            for (const auto &endpoint : timedOutPeers)
-            {
-              for (auto &peer : peers_)
-              {
-                if (peer->getEndpoint() == endpoint)
-                {
-                  std::cerr << "[Heartbeat] Disconnecting timed-out peer: "
-                            << endpoint << std::endl;
-                  peer->close();
-                }
-              }
-            }
-          }
+                            auto timedOutPeers = peerScorer_.getHeartbeatTimeoutPeers(
+                                options_.timeouts.heartbeatTimeoutSec);
+                            if (!timedOutPeers.empty())
+                            {
+                              std::lock_guard<std::mutex> lock(peersMutex_);
+                              for (const auto &endpoint : timedOutPeers)
+                              {
+                                for (auto &peer : peers_)
+                                {
+                                  if (peer->getEndpoint() == endpoint)
+                                  {
+                                    peer->close();
+                                    peerManager_.quarantinePeer(endpoint, options_.timeouts.quarantineSec);
+                                  }
+                                }
+                                connectionManager_.unregisterConnection(endpoint);
+                              }
+                            }
 
-          startHeartbeatTimer();
-        } });
+                            refreshMetrics();
+                            startHeartbeatTimer();
+                          } });
     }
-
-    // ─── Peer dedup ─────────────────────────────────────────────────────
 
     bool Node::isAlreadyConnected(const std::string &host, uint16_t port) const
     {
       std::lock_guard<std::mutex> lock(peersMutex_);
+      const std::string endpoint = makeEndpoint(host, port);
       for (const auto &peer : peers_)
       {
         if (!peer->isConnected())
+        {
           continue;
-        if (peer->getListenPort() == port)
+        }
+        if (peer->getEndpoint() == endpoint ||
+            peer->getListenPort() == port ||
+            peer->getPort() == port)
+        {
           return true;
-        if (peer->getPort() == port)
-          return true;
+        }
       }
       return false;
     }
 
-    // ─── Peer scoring bridge ────────────────────────────────────────────
+    std::vector<std::pair<std::string, int32_t>> Node::connectedPeerScores() const
+    {
+      std::vector<std::pair<std::string, int32_t>> scores;
+      const auto peers = getPeerList();
+      for (const auto &endpoint : peers)
+      {
+        scores.push_back({endpoint, peerScorer_.getScore(endpoint)});
+      }
+      return scores;
+    }
+
+    void Node::refreshMetrics()
+    {
+      networkMetrics_.setConnectedPeers(getPeerList().size());
+      networkMetrics_.setKnownPeers(peerManager_.getKnownPeers().size());
+
+      size_t bannedCount = 0;
+      for (const auto &entry : peerScorer_.getAllPeers())
+      {
+        if (entry.second.banned)
+        {
+          ++bannedCount;
+        }
+      }
+      networkMetrics_.setBannedPeers(bannedCount);
+    }
 
     void Node::penalizePeerByEndpoint(const std::string &endpoint, int32_t penalty)
     {
@@ -633,17 +946,20 @@ namespace blockchain
         {
           if (peer->getEndpoint() == endpoint)
           {
-            std::cerr << "[Node] Disconnecting banned peer: " << endpoint << std::endl;
             peer->close();
+            peerManager_.quarantinePeer(endpoint, options_.timeouts.quarantineSec);
+            connectionManager_.unregisterConnection(endpoint);
             break;
           }
         }
       }
+      refreshMetrics();
     }
 
     void Node::rewardPeerByEndpoint(const std::string &endpoint, int32_t reward)
     {
       peerScorer_.rewardPeer(endpoint, reward);
+      refreshMetrics();
     }
 
   } // namespace network

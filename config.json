@@ -1,0 +1,32 @@
+{
+  "name": "PersonalBlockchain",
+  "p2p_port": 5000,
+  "http_port": 8000,
+  "difficulty": 2,
+  "consensus": "pow",
+  "data_dir": "./data",
+  "public_ip": "",
+  "bootstrap_nodes": [
+    "127.0.0.1:5000"
+  ],
+  "seed_peers": [],
+  "peer_limits": {
+    "max_outbound_peers": 8,
+    "max_inbound_peers": 32
+  },
+  "network_timeouts": {
+    "heartbeat_interval_sec": 15,
+    "heartbeat_timeout_sec": 45,
+    "gossip_interval_sec": 30,
+    "peer_rotation_sec": 45,
+    "quarantine_sec": 120,
+    "dedup_window_sec": 90
+  },
+  "retry_policy": {
+    "max_retries": 6,
+    "base_delay_ms": 500,
+    "max_delay_ms": 30000,
+    "jitter_ms": 400,
+    "reconnect_cooldown_ms": 1200
+  }
+}
