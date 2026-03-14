@@ -194,7 +194,10 @@ namespace blockchain
     // Coinbase transaction in genesis
     Transaction coinbase;
     coinbase.senderPublicKey = "COINBASE";
-    coinbase.receiverPublicKey = "GENESIS";
+    coinbase.fromAddress = "COINBASE";
+    coinbase.toAddress = "GENESIS";
+    coinbase.receiverPublicKey = "";
+    coinbase.amount = 50;
     coinbase.payload = "Genesis Block";
     coinbase.timestamp = genesis.timestamp;
     coinbase.computeTxID();

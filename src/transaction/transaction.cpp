@@ -12,10 +12,26 @@
 namespace blockchain
 {
 
+  namespace
+  {
+    std::string buildTxCore(const Transaction &tx)
+    {
+      std::ostringstream oss;
+      oss << tx.senderPublicKey << '|'
+          << tx.receiverPublicKey << '|'
+          << tx.fromAddress << '|'
+          << tx.toAddress << '|'
+          << tx.amount << '|'
+          << tx.nonce << '|'
+          << tx.payload << '|'
+          << tx.timestamp;
+      return oss.str();
+    }
+  }
+
   void Transaction::computeTxID()
   {
-    std::string raw = senderPublicKey + receiverPublicKey + payload + timestamp;
-    txID = crypto::sha256(raw);
+    txID = crypto::sha256(buildTxCore(*this));
   }
 
   void Transaction::sign(const std::string &privateKey)
@@ -33,13 +49,23 @@ namespace blockchain
     {
       return true; // Coinbase transactions are always valid
     }
+    if (amount == 0)
+    {
+      return false;
+    }
     if (txID.empty() || digitalSignature.empty() || senderPublicKey.empty())
     {
       return false;
     }
+
+    std::string expectedFrom = crypto::sha256(senderPublicKey);
+    if (!fromAddress.empty() && fromAddress != expectedFrom)
+    {
+      return false;
+    }
+
     // Recompute txID to ensure it matches
-    std::string raw = senderPublicKey + receiverPublicKey + payload + timestamp;
-    std::string computedID = crypto::sha256(raw);
+    std::string computedID = crypto::sha256(buildTxCore(*this));
     if (computedID != txID)
     {
       return false;
@@ -94,6 +120,10 @@ namespace blockchain
     return nlohmann::json{{"txID", txID},
                           {"senderPublicKey", senderPublicKey},
                           {"receiverPublicKey", receiverPublicKey},
+                          {"fromAddress", fromAddress},
+                          {"toAddress", toAddress},
+                          {"amount", amount},
+                          {"nonce", nonce},
                           {"payload", payload},
                           {"timestamp", timestamp},
                           {"digitalSignature", digitalSignature}};
@@ -105,9 +135,27 @@ namespace blockchain
     tx.txID = j.value("txID", "");
     tx.senderPublicKey = j.value("senderPublicKey", "");
     tx.receiverPublicKey = j.value("receiverPublicKey", "");
+    tx.fromAddress = j.value("fromAddress", "");
+    tx.toAddress = j.value("toAddress", "");
+    tx.amount = j.value("amount", uint64_t(0));
+    tx.nonce = j.value("nonce", uint64_t(0));
     tx.payload = j.value("payload", "");
     tx.timestamp = j.value("timestamp", "");
     tx.digitalSignature = j.value("digitalSignature", "");
+
+    // Backward compatibility for older chain entries.
+    if (tx.fromAddress.empty() && !tx.senderPublicKey.empty() && tx.senderPublicKey != "COINBASE")
+    {
+      tx.fromAddress = crypto::sha256(tx.senderPublicKey);
+    }
+    if (tx.toAddress.empty() && !tx.receiverPublicKey.empty())
+    {
+      tx.toAddress = crypto::sha256(tx.receiverPublicKey);
+    }
+    if (tx.amount == 0 && tx.isCoinbase())
+    {
+      tx.amount = 50;
+    }
     return tx;
   }
 

@@ -51,3 +51,30 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 elseif(MSVC)
     target_compile_options(blockchain_node PRIVATE /W4)
 endif()
+
+option(BUILD_TESTS "Build lightweight integration tests" ON)
+if(BUILD_TESTS)
+    add_executable(wallet_system_tests
+        tests/wallet_system_tests.cpp
+        src/block/block.cpp
+        src/core/blockchain.cpp
+        src/state/state_manager.cpp
+        src/transaction/transaction.cpp
+        src/wallet/wallet.cpp
+        src/crypto/sha256.cpp
+        src/crypto/ecdsa.cpp
+        src/consensus/pow_engine.cpp
+    )
+
+    target_include_directories(wallet_system_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${Boost_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(wallet_system_tests PRIVATE
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        Boost::system
+        Threads::Threads
+    )
+endif()

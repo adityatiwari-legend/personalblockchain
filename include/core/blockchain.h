@@ -78,6 +78,15 @@ namespace blockchain
     /** Get chain length. */
     size_t getChainLength() const;
 
+    /** Get confirmed balance for a wallet address. */
+    uint64_t getBalanceForAddress(const std::string &address) const;
+
+    /** Get last confirmed nonce for a wallet address. */
+    uint64_t getLastNonceForAddress(const std::string &address) const;
+
+    /** Get confirmed transactions involving a wallet address. */
+    std::vector<Transaction> getTransactionsForAddress(const std::string &address) const;
+
     /** Get difficulty. */
     uint32_t getDifficulty() const { return difficulty_; }
 

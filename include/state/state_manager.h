@@ -44,6 +44,15 @@ public:
    */
   size_t getTransactionCount(const std::string &publicKey) const;
 
+  /** Get confirmed balance for wallet address. */
+  uint64_t getBalance(const std::string &address) const;
+
+  /** Get latest confirmed sender nonce for wallet address. */
+  uint64_t getLastNonce(const std::string &address) const;
+
+  /** Get all confirmed transactions touching an address. */
+  std::vector<Transaction> getTransactionsForAddress(const std::string &address) const;
+
   /**
    * Get all transaction IDs.
    */
@@ -55,6 +64,9 @@ private:
   std::map<std::string, std::set<std::string>> ownershipMap_;
   // Global set of all spent txIDs for quick double-spend lookup
   std::set<std::string> spentTxIDs_;
+  std::map<std::string, uint64_t> balances_;
+  std::map<std::string, uint64_t> lastNonceMap_;
+  std::map<std::string, std::vector<Transaction>> transactionsByAddress_;
 };
 
 } // namespace blockchain

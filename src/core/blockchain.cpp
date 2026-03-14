@@ -1,9 +1,15 @@
 #include "core/blockchain.h"
+#include "crypto/sha256.h"
 #include <algorithm>
 #include <iostream>
 
 namespace blockchain
 {
+
+  namespace
+  {
+    constexpr uint64_t kBlockReward = 50;
+  }
 
   Blockchain::Blockchain(uint32_t difficulty,
                          consensus::IConsensusEngine *consensusEngine,
@@ -75,6 +81,38 @@ namespace blockchain
       return false;
     }
 
+    // 2.5 Validate amount, sender address mapping, and balance.
+    if (tx.amount == 0)
+    {
+      std::cerr << "[TX] Rejected: Amount must be greater than 0 txID="
+                << tx.txID << std::endl;
+      return false;
+    }
+
+    const std::string expectedFrom = crypto::sha256(tx.senderPublicKey);
+    if (tx.fromAddress != expectedFrom)
+    {
+      std::cerr << "[TX] Rejected: Sender address/public key mismatch txID="
+                << tx.txID << std::endl;
+      return false;
+    }
+
+    uint64_t confirmedBalance = stateManager_.getBalance(tx.fromAddress);
+    if (confirmedBalance < tx.amount)
+    {
+      std::cerr << "[TX] Rejected: Insufficient balance txID=" << tx.txID
+                << " balance=" << confirmedBalance << " amount=" << tx.amount << std::endl;
+      return false;
+    }
+
+    uint64_t expectedNextNonce = stateManager_.getLastNonce(tx.fromAddress) + 1;
+    if (tx.nonce < expectedNextNonce)
+    {
+      std::cerr << "[TX] Rejected: Nonce replay txID=" << tx.txID
+                << " nonce=" << tx.nonce << " expectedAtLeast=" << expectedNextNonce << std::endl;
+      return false;
+    }
+
     // 3. Check replay attack (timestamp)
     if (tx.isExpired(300))
     {
@@ -130,7 +168,10 @@ namespace blockchain
     // Create coinbase (mining reward) transaction
     Transaction coinbase;
     coinbase.senderPublicKey = "COINBASE";
-    coinbase.receiverPublicKey = minerAddress;
+    coinbase.receiverPublicKey = "";
+    coinbase.fromAddress = "COINBASE";
+    coinbase.toAddress = minerAddress;
+    coinbase.amount = kBlockReward;
     coinbase.payload = "Mining Reward";
     coinbase.timestamp = Transaction::currentTimestamp();
     coinbase.computeTxID();
@@ -404,6 +445,24 @@ namespace blockchain
   {
     std::lock_guard<std::mutex> lock(mutex_);
     return chain_.size();
+  }
+
+  uint64_t Blockchain::getBalanceForAddress(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stateManager_.getBalance(address);
+  }
+
+  uint64_t Blockchain::getLastNonceForAddress(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stateManager_.getLastNonce(address);
+  }
+
+  std::vector<Transaction> Blockchain::getTransactionsForAddress(const std::string &address) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stateManager_.getTransactionsForAddress(address);
   }
 
   nlohmann::json Blockchain::chainToJson() const

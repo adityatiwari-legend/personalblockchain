@@ -2,6 +2,7 @@
 #include "utils/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 
@@ -14,7 +15,8 @@ namespace blockchain
                            Blockchain &blockchain, Node &node, uint16_t httpPort)
         : ioContext_(ioContext),
           acceptor_(ioContext, tcp::endpoint(tcp::v4(), httpPort)),
-          blockchain_(blockchain), node_(node), httpPort_(httpPort)
+          blockchain_(blockchain), node_(node), httpPort_(httpPort),
+          walletManager_(blockchain)
     {
       std::cout << "[HTTP] Server listening on port " << httpPort << std::endl;
     }
@@ -233,6 +235,8 @@ namespace blockchain
 
     HttpServer::HttpResponse HttpServer::handleRequest(const HttpRequest &req)
     {
+      const std::string routePath = req.path.substr(0, req.path.find('?'));
+
       // Handle CORS preflight
       if (req.method == "OPTIONS")
       {
@@ -243,43 +247,63 @@ namespace blockchain
         return resp;
       }
 
-      if (req.method == "POST" && req.path == "/wallet/create")
+      if (req.method == "POST" && routePath == "/wallet/create")
       {
         return handleCreateWallet();
       }
-      if (req.method == "POST" && req.path == "/transaction/send")
+      if (req.method == "POST" && routePath == "/wallet/import")
+      {
+        return handleImportWallet(req.body);
+      }
+      if (req.method == "POST" && routePath == "/wallet/loginChallenge")
+      {
+        return handleLoginChallenge(req.body);
+      }
+      if (req.method == "POST" && routePath == "/wallet/verifyLogin")
+      {
+        return handleVerifyLogin(req.body);
+      }
+      if (req.method == "POST" && routePath == "/transaction/send")
       {
         return handleSendTransaction(req.body);
       }
-      if (req.method == "POST" && req.path == "/mine")
+      if (req.method == "POST" && routePath.rfind("/mine", 0) == 0)
       {
-        return handleMine(req.body);
+        return handleMine(req.body, req.path);
       }
-      if (req.method == "GET" && req.path == "/chain")
+      if (req.method == "GET" && routePath == "/chain")
       {
         return handleGetChain();
       }
-      if (req.method == "GET" && req.path == "/mempool")
+      if (req.method == "GET" && routePath == "/mempool")
       {
         return handleGetMempool();
       }
-      if (req.method == "GET" && req.path == "/peers")
+      if (req.method == "GET" && routePath.rfind("/wallet/balance/", 0) == 0)
+      {
+        return handleGetWalletBalance(routePath.substr(std::string("/wallet/balance/").size()));
+      }
+      if (req.method == "GET" && routePath.rfind("/wallet/transactions/", 0) == 0)
+      {
+        return handleGetWalletTransactions(routePath.substr(std::string("/wallet/transactions/").size()));
+      }
+      if (req.method == "GET" && routePath == "/peers")
       {
         return handleGetPeers();
       }
-      if (req.method == "GET" && req.path == "/peers/scores")
+      if (req.method == "GET" && routePath == "/peers/scores")
       {
         return handleGetPeerScores();
       }
-      if (req.method == "GET" && req.path == "/network/stats")
+      if (req.method == "GET" && routePath == "/network/stats")
       {
         return handleNetworkStats();
       }
-      if (req.method == "GET" && req.path == "/health")
+      if (req.method == "GET" && routePath == "/health")
       {
         return handleHealth();
       }
-      if (req.method == "GET" && req.path == "/status")
+      if (req.method == "GET" && routePath == "/status")
       {
         return handleHealth();
       }
@@ -293,22 +317,61 @@ namespace blockchain
 
     // --- Route Handlers ---
 
+    std::string HttpServer::queryParam(const std::string &path, const std::string &key)
+    {
+      size_t q = path.find('?');
+      if (q == std::string::npos || q + 1 >= path.size())
+      {
+        return "";
+      }
+
+      std::string qs = path.substr(q + 1);
+      std::istringstream ss(qs);
+      std::string pair;
+      while (std::getline(ss, pair, '&'))
+      {
+        size_t eq = pair.find('=');
+        if (eq == std::string::npos)
+        {
+          continue;
+        }
+        if (pair.substr(0, eq) == key)
+        {
+          return pair.substr(eq + 1);
+        }
+      }
+
+      return "";
+    }
+
+    bool HttpServer::isLikelyHex(const std::string &value)
+    {
+      if (value.empty())
+      {
+        return false;
+      }
+      for (char c : value)
+      {
+        if (!std::isxdigit(static_cast<unsigned char>(c)))
+        {
+          return false;
+        }
+      }
+      return true;
+    }
+
     HttpServer::HttpResponse HttpServer::handleCreateWallet()
     {
       try
       {
-        auto wallet = std::make_shared<Wallet>();
-
-        {
-          std::lock_guard<std::mutex> lock(walletsMutex_);
-          wallets_[wallet->getPublicKey()] = wallet;
-        }
+        Wallet wallet = walletManager_.createWallet();
+        std::string address = walletManager_.addressFromPublicKey(wallet.getPublicKey());
 
         nlohmann::json j;
-        j["publicKey"] = wallet->getPublicKey();
-        j["privateKey"] = wallet->getPrivateKey();
-        j["message"] =
-            "Wallet created. SAVE YOUR PRIVATE KEY - it cannot be recovered!";
+        j["publicKey"] = wallet.getPublicKey();
+        j["privateKey"] = wallet.getPrivateKey();
+        j["address"] = address;
+        j["message"] = "Wallet created. Save your private key locally.";
 
         HttpResponse resp;
         resp.body = j.dump(2);
@@ -324,6 +387,122 @@ namespace blockchain
       }
     }
 
+    HttpServer::HttpResponse HttpServer::handleImportWallet(const std::string &body)
+    {
+      try
+      {
+        auto j = nlohmann::json::parse(body);
+        std::string privateKey = j.value("privateKey", "");
+        if (!isLikelyHex(privateKey))
+        {
+          HttpResponse resp;
+          resp.statusCode = 400;
+          resp.statusText = "Bad Request";
+          resp.body = R"({"error":"Invalid private key"})";
+          return resp;
+        }
+
+        Wallet wallet = walletManager_.importWallet(privateKey);
+        const std::string address = walletManager_.addressFromPublicKey(wallet.getPublicKey());
+
+        HttpResponse resp;
+        resp.body = nlohmann::json({
+            {"publicKey", wallet.getPublicKey()},
+            {"privateKey", wallet.getPrivateKey()},
+            {"address", address}})
+                        .dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 400;
+        resp.statusText = "Bad Request";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleLoginChallenge(const std::string &body)
+    {
+      try
+      {
+        auto j = nlohmann::json::parse(body);
+        const std::string address = j.value("address", "");
+        const std::string publicKey = j.value("publicKey", "");
+        if (address.empty() || publicKey.empty())
+        {
+          HttpResponse resp;
+          resp.statusCode = 400;
+          resp.statusText = "Bad Request";
+          resp.body = R"({"error":"address and publicKey are required"})";
+          return resp;
+        }
+
+        const std::string challenge = walletManager_.createLoginChallenge(address, publicKey);
+        HttpResponse resp;
+        resp.body = nlohmann::json({
+            {"challenge", challenge},
+            {"expiresInSec", 300}})
+                        .dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 400;
+        resp.statusText = "Bad Request";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleVerifyLogin(const std::string &body)
+    {
+      try
+      {
+        auto j = nlohmann::json::parse(body);
+        const std::string address = j.value("address", "");
+        const std::string publicKey = j.value("publicKey", "");
+        const std::string challenge = j.value("challenge", "");
+        const std::string signature = j.value("signature", "");
+
+        if (address.empty() || publicKey.empty() || challenge.empty() || signature.empty())
+        {
+          HttpResponse resp;
+          resp.statusCode = 400;
+          resp.statusText = "Bad Request";
+          resp.body = R"({"error":"address, publicKey, challenge, signature are required"})";
+          return resp;
+        }
+
+        auto token = walletManager_.verifyLogin(address, publicKey, challenge, signature);
+        if (!token.has_value())
+        {
+          HttpResponse resp;
+          resp.statusCode = 401;
+          resp.statusText = "Unauthorized";
+          resp.body = R"({"error":"Invalid login signature or expired challenge"})";
+          return resp;
+        }
+
+        HttpResponse resp;
+        resp.body = nlohmann::json({
+            {"address", address},
+            {"token", token.value()}})
+                        .dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 400;
+        resp.statusText = "Bad Request";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
     HttpServer::HttpResponse
     HttpServer::handleSendTransaction(const std::string &body)
     {
@@ -331,46 +510,79 @@ namespace blockchain
       {
         auto j = nlohmann::json::parse(body);
 
-        std::string senderPrivKey = j.value("senderPrivateKey", "");
-        std::string senderPubKey = j.value("senderPublicKey", "");
-        std::string receiverPubKey = j.value("receiverPublicKey", "");
-        std::string payload = j.value("payload", "");
+        const std::string fromAddress = j.value("fromAddress", "");
+        const std::string toAddress = j.value("toAddress", "");
+        const std::string senderPublicKey = j.value("senderPublicKey", "");
+        const std::string receiverPublicKey = j.value("receiverPublicKey", "");
+        const std::string payload = j.value("payload", "");
+        const std::string timestamp = j.value("timestamp", "");
+        const std::string txID = j.value("txID", "");
+        const std::string signature = j.value("signature", j.value("digitalSignature", ""));
+        const uint64_t amount = j.value("amount", uint64_t(0));
+        const uint64_t nonce = j.value("nonce", uint64_t(0));
 
-        if (senderPrivKey.empty() || receiverPubKey.empty())
+        if (fromAddress.empty() || toAddress.empty() || senderPublicKey.empty() || signature.empty())
         {
           HttpResponse resp;
           resp.statusCode = 400;
           resp.statusText = "Bad Request";
-          resp.body =
-              R"({"error": "Missing required fields: senderPrivateKey, receiverPublicKey"})";
+          resp.body = R"({"error":"Missing required fields: fromAddress,toAddress,senderPublicKey,signature"})";
           return resp;
         }
 
-        // Create the wallet from private key to derive public key
-        Wallet senderWallet(senderPrivKey);
-        if (!senderPubKey.empty() && senderWallet.getPublicKey() != senderPubKey)
+        if (amount == 0)
         {
           HttpResponse resp;
           resp.statusCode = 400;
           resp.statusText = "Bad Request";
-          resp.body = R"({"error": "Public key does not match private key"})";
+          resp.body = R"({"error":"amount must be > 0"})";
+          return resp;
+        }
+
+        if (payload.size() > 2048)
+        {
+          HttpResponse resp;
+          resp.statusCode = 413;
+          resp.statusText = "Payload Too Large";
+          resp.body = R"({"error":"payload too large"})";
+          return resp;
+        }
+
+        if (blockchain_.getBalanceForAddress(fromAddress) < amount)
+        {
+          HttpResponse resp;
+          resp.statusCode = 400;
+          resp.statusText = "Bad Request";
+          resp.body = R"({"error":"Insufficient balance"})";
           return resp;
         }
 
         Transaction tx;
-        tx.senderPublicKey = senderWallet.getPublicKey();
-        tx.receiverPublicKey = receiverPubKey;
+        tx.senderPublicKey = senderPublicKey;
+        tx.receiverPublicKey = receiverPublicKey;
+        tx.fromAddress = fromAddress;
+        tx.toAddress = toAddress;
+        tx.amount = amount;
+        tx.nonce = nonce;
         tx.payload = payload;
-        tx.timestamp = Transaction::currentTimestamp();
+        tx.timestamp = timestamp.empty() ? Transaction::currentTimestamp() : timestamp;
         tx.computeTxID();
-        tx.sign(senderPrivKey);
+
+        if (!txID.empty() && txID != tx.txID)
+        {
+          HttpResponse resp;
+          resp.statusCode = 400;
+          resp.statusText = "Bad Request";
+          resp.body = R"({"error":"txID mismatch"})";
+          return resp;
+        }
+
+        tx.digitalSignature = signature;
 
         bool accepted = blockchain_.addTransaction(tx);
 
         if (accepted)
         {
-          // Note: broadcast happens automatically via blockchain callback
-
           nlohmann::json resp;
           resp["message"] = "Transaction accepted";
           resp["txID"] = tx.txID;
@@ -385,8 +597,7 @@ namespace blockchain
           HttpResponse resp;
           resp.statusCode = 400;
           resp.statusText = "Bad Request";
-          resp.body = "{\"error\": \"Transaction rejected (invalid signature, "
-                      "expired, or double-spend)\"}";
+          resp.body = "{\"error\":\"Transaction rejected (invalid signature, nonce replay, insufficient balance, expired, or double-spend)\"}";
           return resp;
         }
       }
@@ -410,36 +621,33 @@ namespace blockchain
       }
     }
 
-    HttpServer::HttpResponse HttpServer::handleMine(const std::string &body)
+    HttpServer::HttpResponse HttpServer::handleMine(const std::string &body, const std::string &path)
     {
       try
       {
-        std::string minerAddress;
+        std::string minerAddress = queryParam(path, "minerAddress");
 
         if (!body.empty())
         {
-          auto j = nlohmann::json::parse(body);
-          minerAddress = j.value("minerAddress", "");
+          if (body.front() == '{')
+          {
+            auto j = nlohmann::json::parse(body);
+            minerAddress = j.value("minerAddress", "");
+          }
         }
 
         if (minerAddress.empty())
         {
-          // Create a temporary wallet for mining reward
-          // WARNING: The private key is discarded — coins sent here are unspendable.
-          // Callers should provide a persistent minerAddress.
-          Wallet minerWallet;
-          minerAddress = minerWallet.getPublicKey();
-          std::cerr << "[HTTP] /mine called without minerAddress — using ephemeral wallet. "
-                    << "Coins will be unspendable." << std::endl;
+          minerAddress = "GENESIS";
         }
 
         Block newBlock = blockchain_.minePendingTransactions(minerAddress);
 
-        // Note: broadcast happens automatically via blockchain callback
-
         nlohmann::json resp;
         resp["message"] = "Block mined successfully";
         resp["block"] = newBlock.toJson();
+        resp["minerAddress"] = minerAddress;
+        resp["newBalance"] = walletManager_.getBalance(minerAddress);
 
         HttpResponse httpResp;
         httpResp.body = resp.dump(2);
@@ -494,6 +702,59 @@ namespace blockchain
 
         HttpResponse resp;
         resp.body = out.dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleGetWalletBalance(const std::string &address)
+    {
+      try
+      {
+        HttpResponse resp;
+        resp.body = nlohmann::json({
+            {"address", address},
+            {"balance", walletManager_.getBalance(address)},
+            {"nextNonce", walletManager_.getLastNonce(address) + 1}})
+                        .dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleGetWalletTransactions(const std::string &address)
+    {
+      try
+      {
+        auto txs = walletManager_.getTransactions(address);
+        nlohmann::json list = nlohmann::json::array();
+        for (const auto &tx : txs)
+        {
+          nlohmann::json row = tx.toJson();
+          row["direction"] = tx.isCoinbase() ? "reward" : (tx.fromAddress == address ? "sent" : "received");
+          list.push_back(row);
+        }
+
+        HttpResponse resp;
+        resp.body = nlohmann::json({
+            {"address", address},
+            {"count", txs.size()},
+            {"transactions", list}})
+                        .dump(2);
         return resp;
       }
       catch (const std::exception &e)

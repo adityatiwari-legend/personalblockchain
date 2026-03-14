@@ -12,9 +12,13 @@ namespace blockchain {
  * Each transaction is signed by the sender using ECDSA.
  */
 struct Transaction {
-  std::string txID; // SHA-256(sender + receiver + payload + timestamp)
+  std::string txID; // SHA-256(core tx fields)
   std::string senderPublicKey;   // Compressed hex public key of sender
-  std::string receiverPublicKey; // Compressed hex public key of receiver
+  std::string receiverPublicKey; // Optional receiver public key
+  std::string fromAddress;       // SHA256(senderPublicKey)
+  std::string toAddress;         // Recipient wallet address
+  uint64_t amount = 0;           // Transfer amount in smallest unit
+  uint64_t nonce = 0;            // Monotonic sender nonce (replay protection)
   std::string payload;           // Generic payload (JSON string or plaintext)
   std::string timestamp;         // ISO 8601 format
   std::string digitalSignature;  // Hex-encoded ECDSA signature of txID
