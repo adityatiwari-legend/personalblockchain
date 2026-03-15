@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
+import { copyTextToClipboard } from '../services/clipboard';
 
 function formatSeconds(seconds) {
   const mins = Math.floor(seconds / 60);
@@ -30,7 +32,12 @@ export default function WalletCreatedModal({ wallet, onClose }) {
   const countdownLabel = useMemo(() => formatSeconds(secondsLeft), [secondsLeft]);
 
   const copyToClipboard = async (value) => {
-    await navigator.clipboard.writeText(value);
+    try {
+      await copyTextToClipboard(value);
+      toast.success('Copied to clipboard');
+    } catch {
+      toast.error('Copy failed. Please copy manually.');
+    }
   };
 
   const handleManualClose = () => {

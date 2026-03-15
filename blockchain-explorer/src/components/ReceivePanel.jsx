@@ -1,6 +1,14 @@
+import toast from 'react-hot-toast';
+import { copyTextToClipboard } from '../services/clipboard';
+
 export default function ReceivePanel({ address }) {
   const copyAddress = async () => {
-    await navigator.clipboard.writeText(address);
+    try {
+      await copyTextToClipboard(address);
+      toast.success('Address copied');
+    } catch {
+      toast.error('Copy failed. Please copy manually.');
+    }
   };
 
   return (
