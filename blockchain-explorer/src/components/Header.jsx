@@ -1,6 +1,6 @@
 import { Bell, Search, User, Cpu } from 'lucide-react';
 
-export default function Header({ chainName = 'PersonalBlockchain' }) {
+export default function Header({ chainName = 'PersonalBlockchain', section = 'Dashboard' }) {
   return (
     <header className="flex items-center justify-between pb-6 border-b border-gray-800/50 mb-8 w-full sticky top-0 md:bg-[#0b0f19]/80 md:backdrop-blur-md z-40 px-8 pt-6">
       <div className="flex flex-col gap-1">
@@ -8,7 +8,7 @@ export default function Header({ chainName = 'PersonalBlockchain' }) {
           <Cpu className="w-3 h-3" />
           <span>Blockchain</span>
           <span className="text-gray-700">/</span>
-          <span className="text-white">Dashboard</span>
+          <span className="text-white">{section}</span>
         </div>
         <h1 className="text-2xl font-bold text-white tracking-tight">{chainName}</h1>
       </div>

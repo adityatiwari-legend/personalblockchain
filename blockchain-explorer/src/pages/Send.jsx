@@ -78,7 +78,7 @@ export default function Send() {
             <h1 className="text-3xl font-black tracking-tight">Send Transaction</h1>
             <p className="text-zinc-400 text-sm">Sign locally. Private key never leaves browser memory.</p>
           </div>
-          <button className="btn-secondary" onClick={() => navigate('/')}>Back</button>
+          <button className="btn-secondary" onClick={() => navigate('/wallet')}>Back</button>
         </div>
 
         {error && <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">{error}</div>}

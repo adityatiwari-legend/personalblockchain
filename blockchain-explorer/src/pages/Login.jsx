@@ -27,7 +27,7 @@ export default function Login() {
     };
     unlockWallet(walletData);
 
-    navigate('/');
+    navigate('/wallet');
   };
 
   const handleCreate = async () => {

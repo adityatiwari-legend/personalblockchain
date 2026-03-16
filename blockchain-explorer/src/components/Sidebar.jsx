@@ -1,19 +1,23 @@
 import { LayoutDashboard, Wallet, BarChart3, ArrowRightLeft, User, Settings, HelpCircle, Sparkles } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { NavLink, useLocation } from 'react-router-dom';
 
 export default function Sidebar() {
+  const location = useLocation();
+
   const menuItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', active: true },
-    { icon: Wallet, label: 'Assets', active: false },
-    { icon: BarChart3, label: 'Market', active: false, badge: 'New' },
-    { icon: ArrowRightLeft, label: 'Trade', active: false },
+    { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
+    { icon: Wallet, label: 'Assets', path: '/assets' },
+    { icon: BarChart3, label: 'Market', path: '/blocks', badge: 'New' },
+    { icon: ArrowRightLeft, label: 'Trade', path: '/transactions' },
   ];
 
   const bottomItems = [
-    { icon: User, label: 'Profile' },
-    { icon: Settings, label: 'Settings' },
-    { icon: HelpCircle, label: 'Support' },
+    { icon: User, label: 'Profile', path: '/profile' },
+    { icon: Settings, label: 'Settings', path: '/settings' },
+    { icon: HelpCircle, label: 'Support', path: '/transactions' },
   ];
+
+  const isActive = (path) => location.pathname === path;
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0b0f19] border-r border-gray-800 flex flex-col p-6 z-50">
@@ -28,10 +32,11 @@ export default function Sidebar() {
       {/* Main Menu */}
       <div className="space-y-2 flex-1">
         {menuItems.map((item, index) => (
-          <div 
+          <NavLink
             key={index}
+            to={item.path}
             className={`flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all ${
-              item.active 
+              isActive(item.path)
                 ? 'bg-[#1f2937] text-white' 
                 : 'text-gray-400 hover:text-white hover:bg-[#1f2937]/50'
             }`}
@@ -45,20 +50,25 @@ export default function Sidebar() {
                 {item.badge}
               </span>
             )}
-          </div>
+          </NavLink>
         ))}
       </div>
 
       {/* Bottom Menu */}
       <div className="space-y-2 pt-6 border-t border-gray-800">
         {bottomItems.map((item, index) => (
-          <div 
+          <NavLink
             key={index}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer text-gray-400 hover:text-white hover:bg-[#1f2937]/50 transition-all"
+            to={item.path}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all ${
+              isActive(item.path)
+                ? 'bg-[#1f2937] text-white'
+                : 'text-gray-400 hover:text-white hover:bg-[#1f2937]/50'
+            }`}
           >
             <item.icon className="w-5 h-5" />
             <span className="text-sm font-medium">{item.label}</span>
-          </div>
+          </NavLink>
         ))}
       </div>
 

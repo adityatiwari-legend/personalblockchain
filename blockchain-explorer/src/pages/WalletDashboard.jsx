@@ -102,7 +102,7 @@ export default function WalletDashboard() {
             <p className="text-zinc-400 text-sm mt-1">Personalized account view with live chain updates</p>
           </div>
           <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => navigate('/explorer')}>Explorer</button>
+            <button className="btn-secondary" onClick={() => navigate('/dashboard')}>Explorer</button>
             <button className="btn-secondary" onClick={() => navigate('/send')}>Send</button>
             <button className="btn-primary" onClick={() => mineMutation.mutate()} disabled={mineMutation.isPending}>
               {mineMutation.isPending ? 'Mining...' : 'Mine 50 PCN'}

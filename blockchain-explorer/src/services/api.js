@@ -9,6 +9,50 @@ const api = axios.create({
   timeout: 5000,
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withRetry(requestFn, retries = 2, delayMs = 350) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) break;
+      await sleep(delayMs * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+function normalizeChainResponse(data) {
+  if (data && Array.isArray(data.chain)) return data.chain;
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
+function txFromBlock(block) {
+  const txs = Array.isArray(block?.transactions) ? block.transactions : [];
+  const blockHeight = block?.index ?? block?.height ?? null;
+  const blockHash = block?.hash ?? '';
+  return txs.map((tx, idx) => ({
+    id: tx.txID || tx.id || tx.hash || `${blockHash}-${idx}`,
+    txID: tx.txID || tx.id || tx.hash || `${blockHash}-${idx}`,
+    sender: tx.sender || tx.fromAddress || tx.from || tx.senderAddress || '',
+    receiver: tx.receiver || tx.toAddress || tx.to || tx.receiverAddress || '',
+    amount: Number(tx.amount || 0),
+    timestamp: tx.timestamp || block?.timestamp || null,
+    signature: tx.signature || '',
+    payload: tx.payload || '',
+    status: tx.status || 'confirmed',
+    type: tx.type || tx.txType || (tx.sender || tx.fromAddress ? 'transfer' : 'reward'),
+    blockHeight,
+    blockHash,
+    confirmations: tx.confirmations,
+    raw: tx,
+  }));
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -38,18 +82,29 @@ export const blockchainApi = {
   },
 
   getChain: async () => {
-    const response = await api.get('/chain');
-    if (response.data && Array.isArray(response.data.chain)) {
-      return response.data.chain;
+    const response = await withRetry(() => api.get('/chain'));
+    return normalizeChainResponse(response.data);
+  },
+
+  getTransactions: async () => {
+    try {
+      const response = await withRetry(() => api.get('/transactions'));
+      if (response.data && Array.isArray(response.data.transactions)) {
+        return response.data.transactions;
+      }
+      if (Array.isArray(response.data)) {
+        return response.data;
+      }
+    } catch {
+      // Fallback below derives transaction history from chain.
     }
-    if (Array.isArray(response.data)) {
-      return response.data;
-    }
-    return [];
+
+    const chain = await blockchainApi.getChain();
+    return chain.flatMap((block) => txFromBlock(block));
   },
 
   getPeers: async () => {
-    const response = await api.get('/peers');
+    const response = await withRetry(() => api.get('/peers'));
     if (response.data && Array.isArray(response.data.peers)) return response.data.peers;
     if (Array.isArray(response.data)) return response.data;
     return [];
@@ -75,12 +130,14 @@ export const blockchainApi = {
   },
 
   getWalletBalance: async (address) => {
-    const response = await api.get(`/wallet/balance/${address}`);
+    const path = address ? `/wallet/balance/${address}` : '/wallet/balance';
+    const response = await withRetry(() => api.get(path));
     return response.data;
   },
 
   getWalletTransactions: async (address) => {
-    const response = await api.get(`/wallet/transactions/${address}`);
+    const path = address ? `/wallet/transactions/${address}` : '/wallet/transactions';
+    const response = await withRetry(() => api.get(path));
     return response.data;
   },
 
@@ -101,7 +158,48 @@ export const blockchainApi = {
   },
 
   getHealth: async () => {
-    const response = await api.get('/health');
+    const response = await withRetry(() => api.get('/health'));
+    return response.data;
+  },
+
+  getStatus: async () => {
+    const response = await withRetry(() => api.get('/status'));
+    return response.data;
+  },
+
+  getMempool: async () => {
+    const response = await withRetry(() => api.get('/mempool'));
+    if (response.data && Array.isArray(response.data.transactions)) {
+      return response.data.transactions;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
+  },
+
+  getNodeConfig: async () => {
+    const response = await withRetry(() => api.get('/config'));
+    return response.data;
+  },
+
+  updateNodeConfig: async (config) => {
+    const response = await withRetry(() => api.post('/config', config));
+    return response.data;
+  },
+
+  exportPrivateKey: async (address) => {
+    const response = await withRetry(() => api.get(`/wallet/export/${encodeURIComponent(address)}`));
+    return response.data;
+  },
+
+  resetWallet: async () => {
+    const response = await withRetry(() => api.post('/wallet/reset'));
+    return response.data;
+  },
+
+  disconnectNode: async () => {
+    const response = await withRetry(() => api.post('/network/disconnect'));
     return response.data;
   }
 };
