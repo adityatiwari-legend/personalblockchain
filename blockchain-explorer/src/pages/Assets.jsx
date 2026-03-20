@@ -45,7 +45,8 @@ export default function Assets() {
     );
   }, [transactions]);
 
-  const balance = Number(balanceQuery.data?.balance || 0);
+  const confirmedBalance = Number(balanceQuery.data?.confirmedBalance ?? balanceQuery.data?.balance ?? 0);
+  const pendingBalance = Number(balanceQuery.data?.pendingBalance ?? confirmedBalance);
 
   return (
     <ExplorerLayout section="Assets">
@@ -77,7 +78,8 @@ export default function Assets() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <div className="dashboard-card">
                 <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/80 mb-2">Wallet Balance</p>
-                <p className="text-2xl font-bold text-white">{balance.toLocaleString()}</p>
+                <p className="text-2xl font-bold text-white">{pendingBalance.toLocaleString()}</p>
+                <p className="text-xs text-zinc-400 mt-1">Confirmed: {confirmedBalance.toLocaleString()}</p>
               </div>
               <div className="dashboard-card">
                 <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/80 mb-2">Mining Rewards</p>

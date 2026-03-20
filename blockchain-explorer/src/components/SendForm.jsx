@@ -7,14 +7,16 @@ export default function SendForm({ onSubmit, sending, nextNonce }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    await onSubmit({
+    const success = await onSubmit({
       toAddress: toAddress.trim(),
       amount: Number(amount),
       payload: payload.trim(),
       nonce: Number(nextNonce),
     });
-    setAmount('');
-    setPayload('');
+    if (success) {
+      setAmount('');
+      setPayload('');
+    }
   };
 
   return (

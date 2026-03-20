@@ -194,7 +194,7 @@ export default function Dashboard() {
                 <p>Peers: <span className="text-white font-semibold">{statusQuery.data?.peerCount ?? statusQuery.data?.peers ?? 0}</span></p>
                 <p>Chain Height: <span className="text-white font-semibold">{statusQuery.data?.chainLength ?? chain.length}</span></p>
                 <p>Mempool Size: <span className="text-white font-semibold">{Array.isArray(mempoolQuery.data) ? mempoolQuery.data.length : 0}</span></p>
-                <p>Wallet Balance: <span className="text-white font-semibold">{Number(balanceQuery.data?.balance || 0).toLocaleString()}</span></p>
+                <p>Wallet Balance (Pending): <span className="text-white font-semibold">{Number(balanceQuery.data?.pendingBalance ?? balanceQuery.data?.balance ?? 0).toLocaleString()}</span></p>
               </div>
             )}
           </div>

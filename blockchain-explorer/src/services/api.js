@@ -42,7 +42,7 @@ function txFromBlock(block) {
     receiver: tx.receiver || tx.toAddress || tx.to || tx.receiverAddress || '',
     amount: Number(tx.amount || 0),
     timestamp: tx.timestamp || block?.timestamp || null,
-    signature: tx.signature || '',
+    signature: tx.signature || tx.digitalSignature || '',
     payload: tx.payload || '',
     status: tx.status || 'confirmed',
     type: tx.type || tx.txType || (tx.sender || tx.fromAddress ? 'transfer' : 'reward'),
@@ -115,17 +115,33 @@ export const blockchainApi = {
     return response.data;
   },
 
-  addTransaction: async (senderPrivateKey, senderPublicKey, receiverPublicKey, payload) => {
-    const response = await api.post('/transaction/send', {
-      fromAddress: '',
-      toAddress: '',
+  addTransaction: async (senderPrivateKey, senderPublicKey, receiverAddress, payload) => {
+    const {
+      addressFromPublicKey,
+      computeTransactionId,
+      currentUtcNoZ,
+      signMessage,
+    } = await import('./walletCrypto');
+
+    const fromAddress = await addressFromPublicKey(senderPublicKey);
+    const balance = await blockchainApi.getWalletBalance(fromAddress);
+    const nonce = Number(balance?.nextNonce || 1);
+
+    const tx = {
+      fromAddress,
+      toAddress: receiverAddress,
       senderPublicKey,
-      receiverPublicKey,
-      amount: 0,
-      nonce: 0,
-      payload: String(payload),
-      signature: senderPrivateKey,
-    });
+      receiverPublicKey: '',
+      amount: Number(payload?.amount || 0),
+      nonce,
+      payload: String(payload?.message || ''),
+      timestamp: currentUtcNoZ(),
+    };
+
+    tx.txID = await computeTransactionId(tx);
+    tx.signature = await signMessage(senderPrivateKey, tx.txID);
+
+    const response = await api.post('/transaction/send', tx);
     return response.data;
   },
 

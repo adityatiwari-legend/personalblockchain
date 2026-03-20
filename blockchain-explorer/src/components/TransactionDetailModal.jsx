@@ -37,10 +37,12 @@ export default function TransactionDetailModal({ transaction, onClose }) {
 
           <div className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Detail label="Sender" value={transaction.sender || 'System'} mono />
-              <Detail label="Receiver" value={transaction.receiver || 'N/A'} mono />
+              <Detail label="Sender" value={transaction.sender || transaction.fromAddress || 'System'} mono />
+              <Detail label="Receiver" value={transaction.receiver || transaction.toAddress || 'N/A'} mono />
               <Detail label="Amount" value={String(transaction.amount ?? 0)} />
               <Detail label="Status" value={transaction.status || 'confirmed'} />
+              <Detail label="Timestamp" value={String(transaction.timestamp || 'N/A')} />
+              <Detail label="Payload" value={String(transaction.payload || 'N/A')} mono />
               <Detail label="Block Height" value={String(transaction.blockHeight ?? 'N/A')} />
               <Detail label="Block Hash" value={transaction.blockHash || 'N/A'} mono />
               <Detail label="Confirmations" value={String(transaction.confirmations ?? 'N/A')} />
