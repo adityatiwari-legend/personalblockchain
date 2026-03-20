@@ -5,6 +5,7 @@
 #include <cctype>
 #include <iostream>
 #include <sstream>
+#include <unordered_set>
 
 namespace blockchain
 {
@@ -274,6 +275,10 @@ namespace blockchain
       if (req.method == "GET" && routePath == "/chain")
       {
         return handleGetChain();
+      }
+      if (req.method == "GET" && routePath == "/transactions")
+      {
+        return handleGetTransactions();
       }
       if (req.method == "GET" && routePath == "/mempool")
       {
@@ -582,7 +587,42 @@ namespace blockchain
           nlohmann::json resp;
           resp["message"] = "Transaction accepted";
           resp["txID"] = tx.txID;
-          resp["transaction"] = tx.toJson();
+          nlohmann::json txJson = tx.toJson();
+          txJson["status"] = "pending";
+          txJson["blockHeight"] = nullptr;
+          txJson["blockHash"] = "";
+          resp["transaction"] = txJson;
+
+          const auto mempool = blockchain_.getMempool();
+          uint64_t pendingSent = 0;
+          uint64_t pendingReceived = 0;
+          uint64_t highestPendingNonce = blockchain_.getLastNonceForAddress(fromAddress);
+          for (const auto &pendingTx : mempool)
+          {
+            if (pendingTx.fromAddress == fromAddress)
+            {
+              pendingSent += pendingTx.amount;
+              highestPendingNonce = std::max(highestPendingNonce, pendingTx.nonce);
+            }
+            if (pendingTx.toAddress == fromAddress)
+            {
+              pendingReceived += pendingTx.amount;
+            }
+          }
+
+          const uint64_t confirmedBalance = walletManager_.getBalance(fromAddress);
+          int64_t pendingBalance = static_cast<int64_t>(confirmedBalance);
+          pendingBalance += static_cast<int64_t>(pendingReceived);
+          pendingBalance -= static_cast<int64_t>(pendingSent);
+
+          resp["wallet"] = {
+              {"address", fromAddress},
+              {"confirmedBalance", confirmedBalance},
+              {"pendingSent", pendingSent},
+              {"pendingReceived", pendingReceived},
+              {"pendingBalance", pendingBalance},
+              {"nextNonce", highestPendingNonce + 1}};
+          resp["mempoolSize"] = mempool.size();
 
           HttpResponse httpResp;
           httpResp.body = resp.dump(2);
@@ -681,6 +721,59 @@ namespace blockchain
       }
     }
 
+    HttpServer::HttpResponse HttpServer::handleGetTransactions()
+    {
+      try
+      {
+        const auto chain = blockchain_.getChain();
+        const auto mempool = blockchain_.getMempool();
+
+        nlohmann::json transactions = nlohmann::json::array();
+        std::unordered_set<std::string> confirmedTxIds;
+
+        for (const auto &block : chain)
+        {
+          for (const auto &tx : block.transactions)
+          {
+            nlohmann::json row = tx.toJson();
+            row["status"] = "confirmed";
+            row["blockHeight"] = block.index;
+            row["blockHash"] = block.hash;
+            transactions.push_back(row);
+            confirmedTxIds.insert(tx.txID);
+          }
+        }
+
+        for (const auto &tx : mempool)
+        {
+          if (confirmedTxIds.count(tx.txID) > 0)
+          {
+            continue;
+          }
+
+          nlohmann::json row = tx.toJson();
+          row["status"] = "pending";
+          row["blockHeight"] = nullptr;
+          row["blockHash"] = "";
+          transactions.push_back(row);
+        }
+
+        HttpResponse resp;
+        resp.body = nlohmann::json({{"count", transactions.size()},
+                                    {"transactions", transactions}})
+                        .dump(2);
+        return resp;
+      }
+      catch (const std::exception &e)
+      {
+        HttpResponse resp;
+        resp.statusCode = 500;
+        resp.statusText = "Internal Server Error";
+        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        return resp;
+      }
+    }
+
     HttpServer::HttpResponse HttpServer::handleGetMempool()
     {
       try
@@ -714,10 +807,39 @@ namespace blockchain
     {
       try
       {
+        const uint64_t confirmedBalance = walletManager_.getBalance(address);
+        const uint64_t confirmedNonce = walletManager_.getLastNonce(address);
+        const auto mempool = blockchain_.getMempool();
+
+        uint64_t pendingSent = 0;
+        uint64_t pendingReceived = 0;
+        uint64_t highestPendingNonce = confirmedNonce;
+
+        for (const auto &tx : mempool)
+        {
+          if (tx.fromAddress == address)
+          {
+            pendingSent += tx.amount;
+            highestPendingNonce = std::max(highestPendingNonce, tx.nonce);
+          }
+          if (tx.toAddress == address)
+          {
+            pendingReceived += tx.amount;
+          }
+        }
+
+        int64_t pendingBalance = static_cast<int64_t>(confirmedBalance);
+        pendingBalance += static_cast<int64_t>(pendingReceived);
+        pendingBalance -= static_cast<int64_t>(pendingSent);
+
         HttpResponse resp;
         resp.body = nlohmann::json({{"address", address},
-                                    {"balance", walletManager_.getBalance(address)},
-                                    {"nextNonce", walletManager_.getLastNonce(address) + 1}})
+                                    {"balance", confirmedBalance},
+                                    {"confirmedBalance", confirmedBalance},
+                                    {"pendingBalance", pendingBalance},
+                                    {"pendingSent", pendingSent},
+                                    {"pendingReceived", pendingReceived},
+                                    {"nextNonce", highestPendingNonce + 1}})
                         .dump(2);
         return resp;
       }
@@ -736,17 +858,61 @@ namespace blockchain
       try
       {
         auto txs = walletManager_.getTransactions(address);
+        auto mempool = blockchain_.getMempool();
+        auto chain = blockchain_.getChain();
+        std::unordered_set<std::string> confirmedTxIds;
+        std::map<std::string, std::pair<size_t, std::string>> txBlockMeta;
+
+        for (const auto &block : chain)
+        {
+          for (const auto &tx : block.transactions)
+          {
+            txBlockMeta[tx.txID] = {block.index, block.hash};
+          }
+        }
         nlohmann::json list = nlohmann::json::array();
         for (const auto &tx : txs)
         {
           nlohmann::json row = tx.toJson();
           row["direction"] = tx.isCoinbase() ? "reward" : (tx.fromAddress == address ? "sent" : "received");
+          row["status"] = "confirmed";
+          const auto metaIt = txBlockMeta.find(tx.txID);
+          if (metaIt != txBlockMeta.end())
+          {
+            row["blockHeight"] = metaIt->second.first;
+            row["blockHash"] = metaIt->second.second;
+          }
+          else
+          {
+            row["blockHeight"] = nullptr;
+            row["blockHash"] = "";
+          }
+          list.push_back(row);
+          confirmedTxIds.insert(tx.txID);
+        }
+
+        for (const auto &tx : mempool)
+        {
+          if (tx.fromAddress != address && tx.toAddress != address)
+          {
+            continue;
+          }
+          if (confirmedTxIds.count(tx.txID) > 0)
+          {
+            continue;
+          }
+
+          nlohmann::json row = tx.toJson();
+          row["direction"] = tx.isCoinbase() ? "reward" : (tx.fromAddress == address ? "sent" : "received");
+          row["status"] = "pending";
+          row["blockHeight"] = nullptr;
+          row["blockHash"] = "";
           list.push_back(row);
         }
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"address", address},
-                                    {"count", txs.size()},
+                                    {"count", list.size()},
                                     {"transactions", list}})
                         .dump(2);
         return resp;

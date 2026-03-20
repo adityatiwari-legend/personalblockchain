@@ -67,6 +67,7 @@ function TransactionTableBase({
                   <th className="py-2">Sender</th>
                   <th className="py-2">Receiver</th>
                   <th className="py-2">Amount</th>
+                  <th className="py-2">Payload</th>
                   <th className="py-2">Timestamp</th>
                   <th className="py-2">Block Height</th>
                   <th className="py-2">Status</th>
@@ -92,6 +93,7 @@ function TransactionTableBase({
               const receiver = tx.receiver || tx.toAddress || tx.to || tx.receiverAddress || '';
               const amount = Number(tx.amount || 0);
               const status = tx.status || 'confirmed';
+              const isPending = status === 'pending';
               const direction = tx.direction || tx.type || 'received';
 
               return mode === 'explorer' ? (
@@ -105,10 +107,11 @@ function TransactionTableBase({
                   <td className="py-3 font-mono text-xs text-zinc-400">{shorten(sender)}</td>
                   <td className="py-3 font-mono text-xs text-zinc-400">{shorten(receiver)}</td>
                   <td className="py-3 text-zinc-200">{amount.toLocaleString()}</td>
+                  <td className="py-3 text-zinc-300">{tx.payload ? shorten(String(tx.payload), 18, 12) : '-'}</td>
                   <td className="py-3 text-zinc-400">{formatTimestamp(tx.timestamp)}</td>
                   <td className="py-3 text-zinc-300">{tx.blockHeight ?? 'Pending'}</td>
                   <td className="py-3">
-                    <span className="text-xs font-bold text-[#00ff9d] bg-[#00ff9d]/10 px-2 py-1 rounded capitalize">{status}</span>
+                    <span className={`text-xs font-bold px-2 py-1 rounded capitalize ${isPending ? 'text-amber-300 bg-amber-400/10' : 'text-[#00ff9d] bg-[#00ff9d]/10'}`}>{status}</span>
                   </td>
                 </tr>
               ) : (
@@ -128,7 +131,7 @@ function TransactionTableBase({
 
             {list.length === 0 && (
               <tr>
-                <td colSpan={mode === 'explorer' ? 7 : 4} className="py-6 text-center text-zinc-500">
+                <td colSpan={mode === 'explorer' ? 8 : 4} className="py-6 text-center text-zinc-500">
                   No transactions yet
                 </td>
               </tr>

@@ -50,9 +50,72 @@ export default function Send() {
 
       return blockchainApi.sendTransaction(tx);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['balance', address]);
-      queryClient.invalidateQueries(['transactions', address]);
+    onSuccess: (result) => {
+      const tx = result?.transaction;
+      const walletSnapshot = result?.wallet;
+
+      if (tx) {
+        queryClient.setQueryData(['mempool'], (old) => {
+          const list = Array.isArray(old) ? old : [];
+          if (list.some((item) => (item.txID || item.id) === tx.txID)) {
+            return list;
+          }
+          return [tx, ...list];
+        });
+
+        queryClient.setQueryData(['transactions', address], (old) => {
+          const current = old?.transactions || [];
+          const exists = current.some((item) => (item.txID || item.id) === tx.txID);
+          if (exists) return old;
+          return {
+            ...(old || {}),
+            count: (old?.count || current.length) + 1,
+            transactions: [tx, ...current],
+          };
+        });
+
+        queryClient.setQueryData(['wallet-transactions', address], (old) => {
+          const current = old?.transactions || old || [];
+          const exists = current.some((item) => (item.txID || item.id) === tx.txID);
+          if (exists) return old;
+          if (Array.isArray(old)) return [tx, ...old];
+          return {
+            ...(old || {}),
+            count: (old?.count || current.length) + 1,
+            transactions: [tx, ...current],
+          };
+        });
+
+        queryClient.setQueryData(['all-transactions'], (old) => {
+          const list = Array.isArray(old) ? old : (old?.transactions || []);
+          const exists = list.some((item) => (item.txID || item.id) === tx.txID);
+          if (exists) return old;
+          if (Array.isArray(old)) return [tx, ...old];
+          return {
+            ...(old || {}),
+            count: (old?.count || list.length) + 1,
+            transactions: [tx, ...list],
+          };
+        });
+      }
+
+      if (walletSnapshot) {
+        queryClient.setQueryData(['balance', address], (old) => ({
+          ...(old || {}),
+          balance: walletSnapshot.confirmedBalance,
+          confirmedBalance: walletSnapshot.confirmedBalance,
+          pendingBalance: walletSnapshot.pendingBalance,
+          pendingSent: walletSnapshot.pendingSent,
+          pendingReceived: walletSnapshot.pendingReceived,
+          nextNonce: walletSnapshot.nextNonce,
+        }));
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['balance', address] });
+      queryClient.invalidateQueries({ queryKey: ['transactions', address] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-transactions', address] });
+      queryClient.invalidateQueries({ queryKey: ['all-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['mempool'] });
     }
   });
 
@@ -61,8 +124,10 @@ export default function Send() {
       setSending(true);
       setError('');
       await sendMutation.mutateAsync(formData);
+      return true;
     } catch (e) {
       setError(e?.response?.data?.error || e.message || 'Transaction failed');
+      return false;
     } finally {
       setSending(false);
     }

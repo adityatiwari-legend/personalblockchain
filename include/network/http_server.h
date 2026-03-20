@@ -72,6 +72,7 @@ namespace blockchain
       HttpResponse handleSendTransaction(const std::string &body);
       HttpResponse handleMine(const std::string &body, const std::string &path);
       HttpResponse handleGetChain();
+      HttpResponse handleGetTransactions();
       HttpResponse handleGetMempool();
       HttpResponse handleGetWalletBalance(const std::string &address);
       HttpResponse handleGetWalletTransactions(const std::string &address);

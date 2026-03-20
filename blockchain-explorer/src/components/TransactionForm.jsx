@@ -7,14 +7,15 @@ export default function TransactionForm({ onSuccess }) {
   const [formData, setFormData] = useState({
     senderPrivateKey: '',
     senderPublicKey: '',
-    receiverPublicKey: '',
+    receiverAddress: '',
+    amount: '',
     payload: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.senderPrivateKey || !formData.senderPublicKey || !formData.receiverPublicKey || !formData.payload) {
+    if (!formData.senderPrivateKey || !formData.senderPublicKey || !formData.receiverAddress || !formData.amount) {
       toast.error('All fields are required');
       return;
     }
@@ -24,11 +25,14 @@ export default function TransactionForm({ onSuccess }) {
       await blockchainApi.addTransaction(
         formData.senderPrivateKey,
         formData.senderPublicKey,
-        formData.receiverPublicKey,
-        formData.payload
+        formData.receiverAddress,
+        {
+          amount: Number(formData.amount),
+          message: formData.payload,
+        }
       );
       toast.success('Transaction Broadcasted!');
-      setFormData({ senderPrivateKey: '', senderPublicKey: '', receiverPublicKey: '', payload: '' });
+      setFormData({ senderPrivateKey: '', senderPublicKey: '', receiverAddress: '', amount: '', payload: '' });
       if (onSuccess) onSuccess();
     } catch (err) {
       const msg = err.response?.data?.error || err.response?.data?.message || 'Failed to submit';
@@ -77,18 +81,32 @@ export default function TransactionForm({ onSuccess }) {
         </div>
       </div>
 
-      {/* Receiver Public Key Input */}
+      {/* Receiver Address Input */}
       <div className="bg-[#0b0f19] p-4 rounded-2xl border border-gray-800 relative group focus-within:border-[#00ff9d]/50 transition-colors">
-        <label className="text-xs text-gray-500 font-medium mb-2 block">Receiver Public Key</label>
+        <label className="text-xs text-gray-500 font-medium mb-2 block">Receiver Address</label>
         <div className="flex justify-between items-center">
           <input
             type="text"
-            placeholder="0x..."
-            value={formData.receiverPublicKey}
-            onChange={e => setFormData({...formData, receiverPublicKey: e.target.value})}
+            placeholder="Recipient wallet address"
+            value={formData.receiverAddress}
+            onChange={e => setFormData({...formData, receiverAddress: e.target.value})}
             className="bg-transparent text-white font-mono text-sm w-full outline-none placeholder-gray-700"
           />
           <User className="w-5 h-5 text-gray-600 group-focus-within:text-[#00ff9d]" />
+        </div>
+      </div>
+
+      <div className="bg-[#0b0f19] p-4 rounded-2xl border border-gray-800 relative group focus-within:border-[#00ff9d]/50 transition-colors">
+        <label className="text-xs text-gray-500 font-medium mb-2 block">Amount</label>
+        <div className="flex justify-between items-center">
+          <input
+            type="number"
+            min="1"
+            placeholder="Amount"
+            value={formData.amount}
+            onChange={e => setFormData({...formData, amount: e.target.value})}
+            className="bg-transparent text-white font-mono text-sm w-full outline-none placeholder-gray-700"
+          />
         </div>
       </div>
 

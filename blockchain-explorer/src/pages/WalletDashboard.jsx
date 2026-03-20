@@ -17,6 +17,7 @@ export default function WalletDashboard() {
   const address = wallet?.address;
   const prevChainUpdateRef = useRef();
   const prevChainLengthRef = useRef();
+  const prevMempoolSizeRef = useRef();
 
   const { data: balanceData = { balance: 0, nextNonce: 1 } } = useQuery({
     queryKey: ['balance', address],
@@ -42,30 +43,38 @@ export default function WalletDashboard() {
     }
 
     const chainUpdateVersion = health?.chainUpdateVersion;
+    const mempoolSize = health?.mempoolSize;
     const chainLength = health?.chainLength;
+    const previousMempoolSize = prevMempoolSizeRef.current;
     const previousVersion = prevChainUpdateRef.current;
     const previousLength = prevChainLengthRef.current;
 
-    if (previousVersion === undefined && previousLength === undefined) {
+    if (previousVersion === undefined && previousLength === undefined && previousMempoolSize === undefined) {
       prevChainUpdateRef.current = chainUpdateVersion;
       prevChainLengthRef.current = chainLength;
+      prevMempoolSizeRef.current = mempoolSize;
       return;
     }
 
     const versionChanged = chainUpdateVersion !== undefined && chainUpdateVersion !== previousVersion;
     const heightChanged = chainLength !== undefined && chainLength !== previousLength;
 
-    if (versionChanged || heightChanged) {
+    const mempoolChanged = mempoolSize !== undefined && mempoolSize !== previousMempoolSize;
+
+    if (versionChanged || heightChanged || mempoolChanged) {
       queryClient.invalidateQueries({ queryKey: ['balance', address] });
       queryClient.invalidateQueries({ queryKey: ['transactions', address] });
     }
 
     prevChainUpdateRef.current = chainUpdateVersion;
     prevChainLengthRef.current = chainLength;
-  }, [address, health?.chainLength, health?.chainUpdateVersion, queryClient]);
+    prevMempoolSizeRef.current = mempoolSize;
+  }, [address, health?.chainLength, health?.chainUpdateVersion, health?.mempoolSize, queryClient]);
 
   const transactions = useMemo(() => txData.transactions || [], [txData.transactions]);
-  const { balance, nextNonce } = balanceData;
+  const confirmedBalance = Number(balanceData?.confirmedBalance ?? balanceData?.balance ?? 0);
+  const pendingBalance = Number(balanceData?.pendingBalance ?? confirmedBalance);
+  const nextNonce = balanceData?.nextNonce;
 
   const rewards = useMemo(
     () => transactions.filter((t) => t.direction === 'reward').reduce((sum, t) => sum + Number(t.amount || 0), 0),
@@ -113,7 +122,7 @@ export default function WalletDashboard() {
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <div className="xl:col-span-2 space-y-6">
-            <BalanceCard balance={balance} rewards={rewards} />
+            <BalanceCard balance={pendingBalance} confirmedBalance={confirmedBalance} rewards={rewards} />
 
             <div className="dashboard-card h-[280px]">
               <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/80 mb-4">Recent Amount Flow</p>

@@ -100,18 +100,45 @@ namespace blockchain
     }
 
     uint64_t confirmedBalance = stateManager_.getBalance(tx.fromAddress);
-    if (confirmedBalance < tx.amount)
+    uint64_t pendingOutgoing = 0;
+    uint64_t pendingIncoming = 0;
+    for (const auto &pending : mempool_)
+    {
+      if (pending.fromAddress == tx.fromAddress)
+      {
+        pendingOutgoing += pending.amount;
+      }
+      if (pending.toAddress == tx.fromAddress)
+      {
+        pendingIncoming += pending.amount;
+      }
+    }
+
+    uint64_t availableBalance = confirmedBalance + pendingIncoming;
+    if (availableBalance < pendingOutgoing || (availableBalance - pendingOutgoing) < tx.amount)
     {
       std::cerr << "[TX] Rejected: Insufficient balance txID=" << tx.txID
-                << " balance=" << confirmedBalance << " amount=" << tx.amount << std::endl;
+                << " confirmed=" << confirmedBalance
+                << " pendingOutgoing=" << pendingOutgoing
+                << " pendingIncoming=" << pendingIncoming
+                << " amount=" << tx.amount << std::endl;
       return false;
     }
 
-    uint64_t expectedNextNonce = stateManager_.getLastNonce(tx.fromAddress) + 1;
-    if (tx.nonce < expectedNextNonce)
+    uint64_t highestSeenNonce = stateManager_.getLastNonce(tx.fromAddress);
+    for (const auto &pending : mempool_)
     {
-      std::cerr << "[TX] Rejected: Nonce replay txID=" << tx.txID
-                << " nonce=" << tx.nonce << " expectedAtLeast=" << expectedNextNonce << std::endl;
+      if (pending.fromAddress == tx.fromAddress)
+      {
+        highestSeenNonce = std::max(highestSeenNonce, pending.nonce);
+      }
+    }
+
+    uint64_t expectedNextNonce = highestSeenNonce + 1;
+    if (tx.nonce != expectedNextNonce)
+    {
+      std::cerr << "[TX] Rejected: Invalid nonce txID=" << tx.txID
+                << " nonce=" << tx.nonce << " expected=" << expectedNextNonce << std::endl;
       return false;
     }
 
@@ -140,6 +167,7 @@ namespace blockchain
     }
 
     mempool_.push_back(tx);
+    ++chainUpdateVersion_;
     std::cout << "[TX] Accepted transaction txID=" << tx.txID << std::endl;
 
     if (onTransactionAdded_)
