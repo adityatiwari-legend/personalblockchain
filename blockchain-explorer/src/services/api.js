@@ -66,6 +66,11 @@ api.interceptors.response.use(
 );
 
 export const blockchainApi = {
+  walletLogin: async (privateKey) => {
+    const response = await api.post('/wallet/login', { privateKey });
+    return response.data;
+  },
+
   loginChallenge: async (address, publicKey) => {
     const response = await api.post('/wallet/loginChallenge', { address, publicKey });
     return response.data;
@@ -122,6 +127,21 @@ export const blockchainApi = {
       currentUtcNoZ,
       signMessage,
     } = await import('./walletCrypto');
+    const {
+      isValidAddress,
+      isValidPrivateKey,
+      normalizePrivateKey,
+    } = await import('./validation');
+
+    const normalizedPrivateKey = normalizePrivateKey(senderPrivateKey);
+    if (!isValidPrivateKey(normalizedPrivateKey)) {
+      throw new Error('Private key must be exactly 64 hexadecimal characters');
+    }
+
+    const normalizedReceiver = String(receiverAddress || '').trim();
+    if (!isValidAddress(normalizedReceiver)) {
+      throw new Error('Receiver address must match format PCN_ + 40 hex characters');
+    }
 
     const fromAddress = await addressFromPublicKey(senderPublicKey);
     const balance = await blockchainApi.getWalletBalance(fromAddress);
@@ -129,7 +149,7 @@ export const blockchainApi = {
 
     const tx = {
       fromAddress,
-      toAddress: receiverAddress,
+      toAddress: normalizedReceiver,
       senderPublicKey,
       receiverPublicKey: '',
       amount: Number(payload?.amount || 0),
@@ -139,7 +159,7 @@ export const blockchainApi = {
     };
 
     tx.txID = await computeTransactionId(tx);
-    tx.signature = await signMessage(senderPrivateKey, tx.txID);
+    tx.signature = await signMessage(normalizedPrivateKey, tx.txID);
 
     const response = await api.post('/transaction/send', tx);
     return response.data;
@@ -216,6 +236,11 @@ export const blockchainApi = {
 
   disconnectNode: async () => {
     const response = await withRetry(() => api.post('/network/disconnect'));
+    return response.data;
+  },
+
+  trade: async (payload) => {
+    const response = await api.post('/api/trade', payload || {});
     return response.data;
   }
 };

@@ -26,7 +26,8 @@ export function derivePublicKey(privateKeyHex) {
 }
 
 export async function addressFromPublicKey(publicKeyHex) {
-  return sha256Hex(publicKeyHex);
+  const digest = await sha256Hex(publicKeyHex);
+  return `PCN_${digest.slice(0, 40)}`;
 }
 
 export async function signMessage(privateKeyHex, message) {

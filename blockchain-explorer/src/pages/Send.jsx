@@ -6,6 +6,7 @@ import SendForm from '../components/SendForm';
 import TransactionTable from '../components/TransactionTable';
 import { blockchainApi } from '../services/api';
 import { computeTransactionId, currentUtcNoZ, signMessage } from '../services/walletCrypto';
+import { isValidAddress } from '../services/validation';
 import { useWalletStore } from '../store/useWalletStore';
 
 export default function Send() {
@@ -121,6 +122,16 @@ export default function Send() {
 
   const onSubmit = async (formData) => {
     try {
+      if (formData?.error) {
+        setError(formData.error);
+        return false;
+      }
+
+      if (!isValidAddress(formData.toAddress)) {
+        setError('Receiver address must match format PCN_ + 40 hex characters');
+        return false;
+      }
+
       setSending(true);
       setError('');
       await sendMutation.mutateAsync(formData);

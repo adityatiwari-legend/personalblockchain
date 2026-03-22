@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import ExplorerLayout from '../components/ExplorerLayout';
 import { blockchainApi } from '../services/api';
+import { isValidPrivateKey, normalizePrivateKey } from '../services/validation';
 import { useWalletStore } from '../store/useWalletStore';
 
 export default function Settings() {
@@ -54,13 +55,21 @@ export default function Settings() {
   });
 
   const importWalletMutation = useMutation({
-    mutationFn: () => blockchainApi.importWallet(importKey.trim()),
+    mutationFn: async () => {
+      const normalized = normalizePrivateKey(importKey);
+      if (!isValidPrivateKey(normalized)) {
+        throw new Error('Private key must be exactly 64 hexadecimal characters');
+      }
+      await blockchainApi.importWallet(normalized);
+      const login = await blockchainApi.walletLogin(normalized);
+      return { ...login, privateKey: normalized };
+    },
     onSuccess: (data) => {
       unlockWallet({
-        privateKey: importKey.trim(),
+        privateKey: data.privateKey,
         publicKey: data.publicKey || wallet?.publicKey || '',
         address: data.address || wallet?.address || '',
-        token: wallet?.token || '',
+        token: data.token || '',
       });
       toast.success('Wallet imported');
       setImportKey('');
@@ -135,6 +144,7 @@ export default function Settings() {
               placeholder="Import wallet: paste private key"
               value={importKey}
               onChange={(e) => setImportKey(e.target.value)}
+              maxLength={64}
             />
             <button
               type="button"

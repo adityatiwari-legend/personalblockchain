@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isValidAddress } from '../services/validation';
 
 export default function SendForm({ onSubmit, sending, nextNonce }) {
   const [toAddress, setToAddress] = useState('');
@@ -7,8 +8,14 @@ export default function SendForm({ onSubmit, sending, nextNonce }) {
 
   const submit = async (e) => {
     e.preventDefault();
+    const normalizedAddress = toAddress.trim();
+    if (!isValidAddress(normalizedAddress)) {
+      await onSubmit({ error: 'Receiver address must match format PCN_ + 40 hex characters' });
+      return;
+    }
+
     const success = await onSubmit({
-      toAddress: toAddress.trim(),
+      toAddress: normalizedAddress,
       amount: Number(amount),
       payload: payload.trim(),
       nonce: Number(nextNonce),
@@ -22,7 +29,7 @@ export default function SendForm({ onSubmit, sending, nextNonce }) {
   return (
     <form onSubmit={submit} className="dashboard-card space-y-4">
       <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Send Coins</p>
-      <input className="input-field" placeholder="Receiver Address" value={toAddress} onChange={(e) => setToAddress(e.target.value)} required />
+      <input className="input-field" placeholder="Receiver Address (PCN_...)" value={toAddress} onChange={(e) => setToAddress(e.target.value)} required />
       <input className="input-field" placeholder="Amount" type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
       <input className="input-field" placeholder="Memo / Payload" value={payload} onChange={(e) => setPayload(e.target.value)} maxLength={256} />
       <div className="text-xs text-zinc-400">Nonce: {nextNonce}</div>

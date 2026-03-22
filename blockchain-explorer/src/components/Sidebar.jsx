@@ -8,7 +8,7 @@ export default function Sidebar() {
     { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
     { icon: Wallet, label: 'Assets', path: '/assets' },
     { icon: BarChart3, label: 'Market', path: '/blocks', badge: 'New' },
-    { icon: ArrowRightLeft, label: 'Trade', path: '/transactions' },
+    { icon: ArrowRightLeft, label: 'Trade', path: '/transactions', disabled: true, badge: 'Soon' },
   ];
 
   const bottomItems = [
@@ -32,25 +32,43 @@ export default function Sidebar() {
       {/* Main Menu */}
       <div className="space-y-2 flex-1">
         {menuItems.map((item, index) => (
-          <NavLink
-            key={index}
-            to={item.path}
-            className={`flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all ${
-              isActive(item.path)
-                ? 'bg-[#1f2937] text-white' 
-                : 'text-gray-400 hover:text-white hover:bg-[#1f2937]/50'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <item.icon className="w-5 h-5" />
-              <span className="text-sm font-medium">{item.label}</span>
+          item.disabled ? (
+            <div
+              key={index}
+              className="flex items-center justify-between px-4 py-3 rounded-xl text-gray-500 bg-[#111827]/50 border border-gray-800 cursor-not-allowed"
+              title="Trade API is not implemented yet"
+            >
+              <div className="flex items-center gap-3">
+                <item.icon className="w-5 h-5" />
+                <span className="text-sm font-medium">{item.label}</span>
+              </div>
+              {item.badge && (
+                <span className="text-[10px] font-bold bg-[#1f2937] border border-gray-700 text-gray-300 px-2 py-0.5 rounded">
+                  {item.badge}
+                </span>
+              )}
             </div>
-            {item.badge && (
-              <span className="text-[10px] font-bold bg-[#1f2937] border border-gray-700 text-gray-300 px-2 py-0.5 rounded">
-                {item.badge}
-              </span>
-            )}
-          </NavLink>
+          ) : (
+            <NavLink
+              key={index}
+              to={item.path}
+              className={`flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all ${
+                isActive(item.path)
+                  ? 'bg-[#1f2937] text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-[#1f2937]/50'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <item.icon className="w-5 h-5" />
+                <span className="text-sm font-medium">{item.label}</span>
+              </div>
+              {item.badge && (
+                <span className="text-[10px] font-bold bg-[#1f2937] border border-gray-700 text-gray-300 px-2 py-0.5 rounded">
+                  {item.badge}
+                </span>
+              )}
+            </NavLink>
+          )
         ))}
       </div>
 

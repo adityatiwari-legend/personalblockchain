@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import toast from 'react-hot-toast';
 
 import WalletCard from '../components/WalletCard';
 import BalanceCard from '../components/BalanceCard';
@@ -18,6 +19,19 @@ export default function WalletDashboard() {
   const prevChainUpdateRef = useRef();
   const prevChainLengthRef = useRef();
   const prevMempoolSizeRef = useRef();
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  useEffect(() => {
+    if (cooldownRemaining <= 0) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setCooldownRemaining((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [cooldownRemaining]);
 
   const { data: balanceData = { balance: 0, nextNonce: 1 } } = useQuery({
     queryKey: ['balance', address],
@@ -88,10 +102,19 @@ export default function WalletDashboard() {
 
   const mineMutation = useMutation({
     mutationFn: () => blockchainApi.mineBlock(address),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      const reward = Number(result?.reward || 50);
+      toast.success(`${reward} PCN mined successfully`);
+      setCooldownRemaining(Number(result?.cooldownSeconds || 30));
       queryClient.invalidateQueries(['balance', address]);
       queryClient.invalidateQueries(['transactions', address]);
       queryClient.invalidateQueries(['health']);
+    },
+    onError: (error) => {
+      const remaining = Number(error?.response?.data?.cooldownRemainingSeconds || 0);
+      if (remaining > 0) {
+        setCooldownRemaining(remaining);
+      }
     }
   });
 
@@ -113,8 +136,8 @@ export default function WalletDashboard() {
           <div className="flex gap-2">
             <button className="btn-secondary" onClick={() => navigate('/dashboard')}>Explorer</button>
             <button className="btn-secondary" onClick={() => navigate('/send')}>Send</button>
-            <button className="btn-primary" onClick={() => mineMutation.mutate()} disabled={mineMutation.isPending}>
-              {mineMutation.isPending ? 'Mining...' : 'Mine 50 PCN'}
+            <button className="btn-primary" onClick={() => mineMutation.mutate()} disabled={mineMutation.isPending || cooldownRemaining > 0}>
+              {mineMutation.isPending ? 'Mining...' : cooldownRemaining > 0 ? `Cooldown ${cooldownRemaining}s` : 'Mine 50 PCN'}
             </button>
             <button className="btn-secondary" onClick={logout}>Logout</button>
           </div>

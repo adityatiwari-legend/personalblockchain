@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { Pickaxe, Loader2, Award } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { blockchainApi } from '../services/api';
@@ -7,15 +7,30 @@ import toast from 'react-hot-toast';
 export default function MiningPanel({ onSuccess, minimal }) {
   const [isMining, setIsMining] = useState(false);
   const [lastMined, setLastMined] = useState(null);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      setCooldownRemaining((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldownRemaining]);
 
   const handleMine = async () => {
     setIsMining(true);
     try {
       const result = await blockchainApi.mineBlock();
       setLastMined(result);
-      toast.success('Block Mined Successfully!');
+      const reward = Number(result?.reward || 50);
+      toast.success(`${reward} PCN mined successfully`);
+      setCooldownRemaining(Number(result?.cooldownSeconds || 30));
       if (onSuccess) onSuccess();
     } catch (err) {
+      const remaining = Number(err.response?.data?.cooldownRemainingSeconds || 0);
+      if (remaining > 0) {
+        setCooldownRemaining(remaining);
+      }
       const msg = err.response?.data?.error || err.response?.data?.message || 'Mining failed';
       toast.error(msg);
     } finally {
@@ -35,9 +50,10 @@ export default function MiningPanel({ onSuccess, minimal }) {
             <p className="text-gray-400 text-xs mb-6 px-4">Contribute hash power to secure the network.</p>
             <button 
                 onClick={handleMine}
+              disabled={cooldownRemaining > 0}
                 className="btn-primary w-full shadow-[0_0_20px_rgba(0,255,157,0.3)]"
             >
-                Start Node
+              {cooldownRemaining > 0 ? `Cooldown ${cooldownRemaining}s` : 'Start Node'}
             </button>
         </div>
       )}
@@ -63,9 +79,10 @@ export default function MiningPanel({ onSuccess, minimal }) {
             </div>
             <button 
                 onClick={handleMine}
+              disabled={cooldownRemaining > 0}
                 className="btn-secondary w-full text-xs"
             >
-                Mine Another Block
+              {cooldownRemaining > 0 ? `Cooldown ${cooldownRemaining}s` : 'Mine Another Block'}
             </button>
         </div>
       )}

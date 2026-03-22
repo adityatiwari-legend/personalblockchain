@@ -91,7 +91,7 @@ namespace blockchain
       return false;
     }
 
-    const std::string expectedFrom = crypto::sha256(tx.senderPublicKey);
+    const std::string expectedFrom = std::string("PCN_") + crypto::sha256(tx.senderPublicKey).substr(0, 40);
     if (tx.fromAddress != expectedFrom)
     {
       std::cerr << "[TX] Rejected: Sender address/public key mismatch txID="

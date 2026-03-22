@@ -6,10 +6,13 @@
 #include "wallet/wallet_manager.h"
 
 #include <boost/asio.hpp>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace blockchain
 {
@@ -67,10 +70,12 @@ namespace blockchain
       // Route handlers
       HttpResponse handleCreateWallet();
       HttpResponse handleImportWallet(const std::string &body);
+      HttpResponse handleWalletLogin(const std::string &body);
       HttpResponse handleLoginChallenge(const std::string &body);
       HttpResponse handleVerifyLogin(const std::string &body);
       HttpResponse handleSendTransaction(const std::string &body);
       HttpResponse handleMine(const std::string &body, const std::string &path);
+      HttpResponse handleTrade(const std::string &body);
       HttpResponse handleGetChain();
       HttpResponse handleGetTransactions();
       HttpResponse handleGetMempool();
@@ -83,6 +88,16 @@ namespace blockchain
 
       static std::string queryParam(const std::string &path, const std::string &key);
       static bool isLikelyHex(const std::string &value);
+      static std::string trim(const std::string &value);
+      static std::string toLower(std::string value);
+      static HttpResponse errorResponse(int statusCode,
+                                        const std::string &statusText,
+                                        const std::string &errorCode,
+                                        const std::string &message);
+      static bool isValidPrivateKey(const std::string &privateKey);
+      static bool isValidAddress(const std::string &address);
+      bool walletExists(const std::string &address) const;
+      static nlohmann::json withTxAliases(const nlohmann::json &txJson);
 
       boost::asio::io_context &ioContext_;
       tcp::acceptor acceptor_;
@@ -93,6 +108,9 @@ namespace blockchain
       // Store wallets created via API (in-memory only)
       std::map<std::string, std::shared_ptr<Wallet>> wallets_;
       std::mutex walletsMutex_;
+      mutable std::mutex miningMutex_;
+      std::unordered_map<std::string, std::chrono::steady_clock::time_point> lastMineAt_;
+      std::unordered_set<std::string> knownAddresses_;
       WalletManager walletManager_;
     };
 

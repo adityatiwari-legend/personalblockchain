@@ -1,10 +1,21 @@
-import { Bell, Search, User, Cpu } from 'lucide-react';
+import { Bell, Search, User, Cpu, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 export default function Header({ chainName = 'PersonalBlockchain', section = 'Dashboard' }) {
+  const navigate = useNavigate();
+
   return (
     <header className="flex items-center justify-between pb-6 border-b border-gray-800/50 mb-8 w-full sticky top-0 md:bg-[#0b0f19]/80 md:backdrop-blur-md z-40 px-8 pt-6">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2 text-xs font-medium text-gray-500">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-700 px-2 py-1 text-gray-300 hover:text-white hover:border-gray-500"
+            onClick={() => navigate(-1)}
+          >
+            <ArrowLeft className="w-3 h-3" />
+            <span>Back</span>
+          </button>
           <Cpu className="w-3 h-3" />
           <span>Blockchain</span>
           <span className="text-gray-700">/</span>
