@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowDown, Key, User, Send, Loader2, FileText } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import toast from 'react-hot-toast';
+import { isValidAddress, isValidPrivateKey, normalizePrivateKey } from '../services/validation';
 
 export default function TransactionForm({ onSuccess }) {
   const [formData, setFormData] = useState({
@@ -20,12 +21,23 @@ export default function TransactionForm({ onSuccess }) {
       return;
     }
 
+    const normalizedPrivateKey = normalizePrivateKey(formData.senderPrivateKey);
+    if (!isValidPrivateKey(normalizedPrivateKey)) {
+      toast.error('Private key must be exactly 64 hexadecimal characters');
+      return;
+    }
+
+    if (!isValidAddress(formData.receiverAddress.trim())) {
+      toast.error('Receiver address must match format PCN_ + 40 hex characters');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await blockchainApi.addTransaction(
-        formData.senderPrivateKey,
+        normalizedPrivateKey,
         formData.senderPublicKey,
-        formData.receiverAddress,
+        formData.receiverAddress.trim(),
         {
           amount: Number(formData.amount),
           message: formData.payload,
@@ -53,6 +65,7 @@ export default function TransactionForm({ onSuccess }) {
             placeholder="Your private key..."
             value={formData.senderPrivateKey}
             onChange={e => setFormData({...formData, senderPrivateKey: e.target.value})}
+            maxLength={64}
             className="bg-transparent text-white font-mono text-sm w-full outline-none placeholder-gray-700"
           />
           <Key className="w-5 h-5 text-gray-600 group-focus-within:text-[#00ff9d]" />

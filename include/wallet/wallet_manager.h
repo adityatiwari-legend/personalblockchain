@@ -31,6 +31,13 @@ namespace blockchain
                                                const std::string &challenge,
                                                const std::string &signatureHex);
 
+        std::optional<std::string> verifyPrivateKeyLogin(const std::string &privateKeyHex,
+                                                         std::string &outAddress,
+                                                         std::string &outPublicKey);
+
+        static bool isValidPrivateKeyHex(const std::string &privateKeyHex);
+        static bool isValidWalletAddress(const std::string &address);
+
         uint64_t getBalance(const std::string &address) const;
         uint64_t getLastNonce(const std::string &address) const;
         std::vector<Transaction> getTransactions(const std::string &address) const;

@@ -3,12 +3,21 @@
 #include "crypto/ecdsa.h"
 #include "crypto/sha256.h"
 
+#include <algorithm>
+#include <cctype>
 #include <random>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 
 namespace blockchain
 {
+
+    namespace
+    {
+        constexpr const char *kPrivateKeyRegex = "^[0-9a-fA-F]{64}$";
+        constexpr const char *kWalletAddressRegex = "^PCN_[0-9a-fA-F]{40}$";
+    }
 
     WalletManager::WalletManager(Blockchain &blockchain) : blockchain_(blockchain) {}
 
@@ -19,12 +28,27 @@ namespace blockchain
 
     Wallet WalletManager::importWallet(const std::string &privateKeyHex) const
     {
+        if (!isValidPrivateKeyHex(privateKeyHex))
+        {
+            throw std::runtime_error("Invalid private key format");
+        }
         return Wallet(privateKeyHex);
     }
 
     std::string WalletManager::addressFromPublicKey(const std::string &publicKey) const
     {
-        return crypto::sha256(publicKey);
+        const std::string digest = crypto::sha256(publicKey);
+        return std::string("PCN_") + digest.substr(0, 40);
+    }
+
+    bool WalletManager::isValidPrivateKeyHex(const std::string &privateKeyHex)
+    {
+        return std::regex_match(privateKeyHex, std::regex(kPrivateKeyRegex));
+    }
+
+    bool WalletManager::isValidWalletAddress(const std::string &address)
+    {
+        return std::regex_match(address, std::regex(kWalletAddressRegex));
     }
 
     std::string WalletManager::randomChallenge() const
@@ -99,6 +123,23 @@ namespace blockchain
         }
 
         return crypto::sha256(address + ":" + std::to_string(now.time_since_epoch().count()));
+    }
+
+    std::optional<std::string> WalletManager::verifyPrivateKeyLogin(const std::string &privateKeyHex,
+                                                                    std::string &outAddress,
+                                                                    std::string &outPublicKey)
+    {
+        if (!isValidPrivateKeyHex(privateKeyHex))
+        {
+            return std::nullopt;
+        }
+
+        Wallet wallet(privateKeyHex);
+        outPublicKey = wallet.getPublicKey();
+        outAddress = addressFromPublicKey(outPublicKey);
+
+        const auto now = std::chrono::system_clock::now();
+        return crypto::sha256(outAddress + ":" + std::to_string(now.time_since_epoch().count()));
     }
 
     uint64_t WalletManager::getBalance(const std::string &address) const

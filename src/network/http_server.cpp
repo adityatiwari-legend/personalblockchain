@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <regex>
 #include <sstream>
 #include <unordered_set>
 
@@ -19,6 +20,7 @@ namespace blockchain
           blockchain_(blockchain), node_(node), httpPort_(httpPort),
           walletManager_(blockchain)
     {
+      knownAddresses_.insert("GENESIS");
       std::cout << "[HTTP] Server listening on port " << httpPort << std::endl;
     }
 
@@ -256,6 +258,10 @@ namespace blockchain
       {
         return handleImportWallet(req.body);
       }
+      if (req.method == "POST" && routePath == "/wallet/login")
+      {
+        return handleWalletLogin(req.body);
+      }
       if (req.method == "POST" && routePath == "/wallet/loginChallenge")
       {
         return handleLoginChallenge(req.body);
@@ -271,6 +277,10 @@ namespace blockchain
       if (req.method == "POST" && routePath.rfind("/mine", 0) == 0)
       {
         return handleMine(req.body, req.path);
+      }
+      if (req.method == "POST" && routePath == "/api/trade")
+      {
+        return handleTrade(req.body);
       }
       if (req.method == "GET" && routePath == "/chain")
       {
@@ -365,12 +375,90 @@ namespace blockchain
       return true;
     }
 
+    std::string HttpServer::trim(const std::string &value)
+    {
+      size_t start = 0;
+      while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+      {
+        ++start;
+      }
+      size_t end = value.size();
+      while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+      {
+        --end;
+      }
+      return value.substr(start, end - start);
+    }
+
+    std::string HttpServer::toLower(std::string value)
+    {
+      std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+                     { return static_cast<char>(std::tolower(c)); });
+      return value;
+    }
+
+    HttpServer::HttpResponse HttpServer::errorResponse(int statusCode,
+                                                       const std::string &statusText,
+                                                       const std::string &errorCode,
+                                                       const std::string &message)
+    {
+      HttpResponse resp;
+      resp.statusCode = statusCode;
+      resp.statusText = statusText;
+      resp.body = nlohmann::json({{"error", message},
+                                  {"errorCode", errorCode},
+                                  {"message", message}})
+                      .dump();
+      return resp;
+    }
+
+    bool HttpServer::isValidPrivateKey(const std::string &privateKey)
+    {
+      return WalletManager::isValidPrivateKeyHex(privateKey);
+    }
+
+    bool HttpServer::isValidAddress(const std::string &address)
+    {
+      return WalletManager::isValidWalletAddress(address);
+    }
+
+    bool HttpServer::walletExists(const std::string &address) const
+    {
+      if (!isValidAddress(address))
+      {
+        return false;
+      }
+
+      if (knownAddresses_.count(address) > 0)
+      {
+        return true;
+      }
+
+      if (blockchain_.getBalanceForAddress(address) > 0)
+      {
+        return true;
+      }
+
+      const auto txs = blockchain_.getTransactionsForAddress(address);
+      return !txs.empty();
+    }
+
+    nlohmann::json HttpServer::withTxAliases(const nlohmann::json &txJson)
+    {
+      nlohmann::json row = txJson;
+      row["transactionId"] = txJson.value("txID", "");
+      row["sender"] = txJson.value("fromAddress", "");
+      row["receiver"] = txJson.value("toAddress", "");
+      return row;
+    }
+
     HttpServer::HttpResponse HttpServer::handleCreateWallet()
     {
       try
       {
         Wallet wallet = walletManager_.createWallet();
         std::string address = walletManager_.addressFromPublicKey(wallet.getPublicKey());
+        knownAddresses_.insert(address);
 
         nlohmann::json j;
         j["publicKey"] = wallet.getPublicKey();
@@ -384,11 +472,7 @@ namespace blockchain
       }
       catch (const std::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 500;
-        resp.statusText = "Internal Server Error";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
+        return errorResponse(500, "Internal Server Error", "WALLET_CREATE_FAILED", e.what());
       }
     }
 
@@ -397,32 +481,62 @@ namespace blockchain
       try
       {
         auto j = nlohmann::json::parse(body);
-        std::string privateKey = j.value("privateKey", "");
-        if (!isLikelyHex(privateKey))
+        std::string privateKey = toLower(trim(j.value("privateKey", "")));
+        if (!isValidPrivateKey(privateKey))
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"Invalid private key"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "INVALID_PRIVATE_KEY", "Private key must be exactly 64 hexadecimal characters");
         }
 
         Wallet wallet = walletManager_.importWallet(privateKey);
         const std::string address = walletManager_.addressFromPublicKey(wallet.getPublicKey());
+        knownAddresses_.insert(address);
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"publicKey", wallet.getPublicKey()},
-                                    {"address", address}})
+                                    {"address", address},
+                                    {"message", "Wallet imported"}})
                         .dump(2);
         return resp;
       }
       catch (const std::exception &e)
       {
+        return errorResponse(400, "Bad Request", "WALLET_IMPORT_FAILED", e.what());
+      }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleWalletLogin(const std::string &body)
+    {
+      try
+      {
+        auto j = nlohmann::json::parse(body);
+        const std::string privateKey = toLower(trim(j.value("privateKey", "")));
+
+        if (!isValidPrivateKey(privateKey))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_PRIVATE_KEY", "Private key must be exactly 64 hexadecimal characters");
+        }
+
+        std::string address;
+        std::string publicKey;
+        auto token = walletManager_.verifyPrivateKeyLogin(privateKey, address, publicKey);
+        if (!token.has_value())
+        {
+          return errorResponse(401, "Unauthorized", "AUTH_FAILED", "Private key verification failed");
+        }
+
+        knownAddresses_.insert(address);
+
         HttpResponse resp;
-        resp.statusCode = 400;
-        resp.statusText = "Bad Request";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
+        resp.body = nlohmann::json({{"address", address},
+                                    {"publicKey", publicKey},
+                                    {"token", token.value()},
+                                    {"message", "Wallet authenticated"}})
+                        .dump(2);
         return resp;
+      }
+      catch (const std::exception &e)
+      {
+        return errorResponse(400, "Bad Request", "AUTH_FAILED", e.what());
       }
     }
 
@@ -435,11 +549,12 @@ namespace blockchain
         const std::string publicKey = j.value("publicKey", "");
         if (address.empty() || publicKey.empty())
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"address and publicKey are required"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "AUTH_FAILED", "address and publicKey are required");
+        }
+
+        if (!isValidAddress(address))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Wallet address format is invalid");
         }
 
         const std::string challenge = walletManager_.createLoginChallenge(address, publicKey);
@@ -451,11 +566,7 @@ namespace blockchain
       }
       catch (const std::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 400;
-        resp.statusText = "Bad Request";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
+        return errorResponse(400, "Bad Request", "AUTH_FAILED", e.what());
       }
     }
 
@@ -471,22 +582,21 @@ namespace blockchain
 
         if (address.empty() || publicKey.empty() || challenge.empty() || signature.empty())
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"address, publicKey, challenge, signature are required"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "AUTH_FAILED", "address, publicKey, challenge, signature are required");
+        }
+
+        if (!isValidAddress(address))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Wallet address format is invalid");
         }
 
         auto token = walletManager_.verifyLogin(address, publicKey, challenge, signature);
         if (!token.has_value())
         {
-          HttpResponse resp;
-          resp.statusCode = 401;
-          resp.statusText = "Unauthorized";
-          resp.body = R"({"error":"Invalid login signature or expired challenge"})";
-          return resp;
+          return errorResponse(401, "Unauthorized", "AUTH_FAILED", "Invalid login signature or expired challenge");
         }
+
+        knownAddresses_.insert(address);
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"address", address},
@@ -496,11 +606,7 @@ namespace blockchain
       }
       catch (const std::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 400;
-        resp.statusText = "Bad Request";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
+        return errorResponse(400, "Bad Request", "AUTH_FAILED", e.what());
       }
     }
 
@@ -511,8 +617,8 @@ namespace blockchain
       {
         auto j = nlohmann::json::parse(body);
 
-        const std::string fromAddress = j.value("fromAddress", "");
-        const std::string toAddress = j.value("toAddress", "");
+        const std::string fromAddress = trim(j.value("fromAddress", ""));
+        const std::string toAddress = trim(j.value("toAddress", ""));
         const std::string senderPublicKey = j.value("senderPublicKey", "");
         const std::string receiverPublicKey = j.value("receiverPublicKey", "");
         const std::string payload = j.value("payload", "");
@@ -524,38 +630,38 @@ namespace blockchain
 
         if (fromAddress.empty() || toAddress.empty() || senderPublicKey.empty() || signature.empty())
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"Missing required fields: fromAddress,toAddress,senderPublicKey,signature"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "INVALID_TRANSACTION", "Missing required fields: fromAddress,toAddress,senderPublicKey,signature");
         }
 
         if (amount == 0)
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"amount must be > 0"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "INVALID_TRANSACTION", "amount must be > 0");
         }
 
         if (payload.size() > 2048)
         {
-          HttpResponse resp;
-          resp.statusCode = 413;
-          resp.statusText = "Payload Too Large";
-          resp.body = R"({"error":"payload too large"})";
-          return resp;
+          return errorResponse(413, "Payload Too Large", "INVALID_TRANSACTION", "payload too large");
+        }
+
+        const std::string expectedFrom = walletManager_.addressFromPublicKey(senderPublicKey);
+        if (!isValidAddress(fromAddress) || fromAddress != expectedFrom)
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Sender address is invalid or does not match sender public key");
+        }
+
+        if (!isValidAddress(toAddress))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Receiver address format is invalid");
+        }
+
+        if (!walletExists(toAddress))
+        {
+          return errorResponse(400, "Bad Request", "RECEIVER_NOT_FOUND", "Receiver wallet does not exist");
         }
 
         if (blockchain_.getBalanceForAddress(fromAddress) < amount)
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"Insufficient balance"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "INSUFFICIENT_BALANCE", "Insufficient balance");
         }
 
         Transaction tx;
@@ -571,11 +677,7 @@ namespace blockchain
 
         if (!txID.empty() && txID != tx.txID)
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = R"({"error":"txID mismatch"})";
-          return resp;
+          return errorResponse(400, "Bad Request", "INVALID_TRANSACTION", "txID mismatch");
         }
 
         tx.digitalSignature = signature;
@@ -587,7 +689,8 @@ namespace blockchain
           nlohmann::json resp;
           resp["message"] = "Transaction accepted";
           resp["txID"] = tx.txID;
-          nlohmann::json txJson = tx.toJson();
+          resp["transactionId"] = tx.txID;
+          nlohmann::json txJson = withTxAliases(tx.toJson());
           txJson["status"] = "pending";
           txJson["blockHeight"] = nullptr;
           txJson["blockHash"] = "";
@@ -630,30 +733,16 @@ namespace blockchain
         }
         else
         {
-          HttpResponse resp;
-          resp.statusCode = 400;
-          resp.statusText = "Bad Request";
-          resp.body = "{\"error\":\"Transaction rejected (invalid signature, nonce replay, insufficient balance, expired, or double-spend)\"}";
-          return resp;
+          return errorResponse(400, "Bad Request", "INVALID_TRANSACTION", "Transaction rejected (invalid signature, nonce replay, insufficient balance, expired, or double-spend)");
         }
       }
       catch (const nlohmann::json::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 400;
-        resp.statusText = "Bad Request";
-        resp.body = nlohmann::json(
-                        {{"error", std::string("JSON parse error: ") + e.what()}})
-                        .dump();
-        return resp;
+        return errorResponse(400, "Bad Request", "INVALID_TRANSACTION", std::string("JSON parse error: ") + e.what());
       }
       catch (const std::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 500;
-        resp.statusText = "Internal Server Error";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
+        return errorResponse(500, "Internal Server Error", "TX_SEND_FAILED", e.what());
       }
     }
 
@@ -661,6 +750,7 @@ namespace blockchain
     {
       try
       {
+        static constexpr int64_t kMiningCooldownSeconds = 30;
         std::string minerAddress = queryParam(path, "minerAddress");
 
         if (!body.empty())
@@ -677,12 +767,52 @@ namespace blockchain
           minerAddress = "GENESIS";
         }
 
+        if (minerAddress != "GENESIS" && !isValidAddress(minerAddress))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Miner address format is invalid");
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(miningMutex_);
+          const auto now = std::chrono::steady_clock::now();
+          const auto it = lastMineAt_.find(minerAddress);
+          if (it != lastMineAt_.end())
+          {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+            if (elapsed < kMiningCooldownSeconds)
+            {
+              const int64_t remaining = kMiningCooldownSeconds - elapsed;
+              HttpResponse cooldownResp = errorResponse(429, "Too Many Requests", "MINING_COOLDOWN_ACTIVE", "Mining cooldown active");
+              cooldownResp.body = nlohmann::json({{"error", "Mining cooldown active"},
+                                                  {"errorCode", "MINING_COOLDOWN_ACTIVE"},
+                                                  {"message", "Mining cooldown active"},
+                                                  {"cooldownRemainingSeconds", remaining}})
+                                      .dump();
+              return cooldownResp;
+            }
+          }
+        }
+
+        const auto mempool = blockchain_.getMempool();
+        const size_t pendingCountBeforeMine = mempool.size();
+
         Block newBlock = blockchain_.minePendingTransactions(minerAddress);
+
+        {
+          std::lock_guard<std::mutex> lock(miningMutex_);
+          lastMineAt_[minerAddress] = std::chrono::steady_clock::now();
+        }
+        knownAddresses_.insert(minerAddress);
 
         nlohmann::json resp;
         resp["message"] = "Block mined successfully";
         resp["block"] = newBlock.toJson();
         resp["minerAddress"] = minerAddress;
+        resp["reward"] = 50;
+        resp["notification"] = "50 PCN mined successfully";
+        resp["cooldownSeconds"] = kMiningCooldownSeconds;
+        resp["mempoolTransactionsMined"] = pendingCountBeforeMine;
+        resp["rewardOnlyBlock"] = (pendingCountBeforeMine == 0);
         resp["newBalance"] = walletManager_.getBalance(minerAddress);
 
         HttpResponse httpResp;
@@ -691,12 +821,13 @@ namespace blockchain
       }
       catch (const std::exception &e)
       {
-        HttpResponse resp;
-        resp.statusCode = 500;
-        resp.statusText = "Internal Server Error";
-        resp.body = nlohmann::json({{"error", e.what()}}).dump();
-        return resp;
+        return errorResponse(500, "Internal Server Error", "MINE_FAILED", e.what());
       }
+    }
+
+    HttpServer::HttpResponse HttpServer::handleTrade(const std::string & /*body*/)
+    {
+      return errorResponse(501, "Not Implemented", "TRADE_NOT_IMPLEMENTED", "Trade endpoint is not implemented yet");
     }
 
     HttpServer::HttpResponse HttpServer::handleGetChain()
@@ -729,17 +860,20 @@ namespace blockchain
         const auto mempool = blockchain_.getMempool();
 
         nlohmann::json transactions = nlohmann::json::array();
+        nlohmann::json confirmedTransactions = nlohmann::json::array();
+        nlohmann::json pendingTransactions = nlohmann::json::array();
         std::unordered_set<std::string> confirmedTxIds;
 
         for (const auto &block : chain)
         {
           for (const auto &tx : block.transactions)
           {
-            nlohmann::json row = tx.toJson();
+            nlohmann::json row = withTxAliases(tx.toJson());
             row["status"] = "confirmed";
             row["blockHeight"] = block.index;
             row["blockHash"] = block.hash;
             transactions.push_back(row);
+            confirmedTransactions.push_back(row);
             confirmedTxIds.insert(tx.txID);
           }
         }
@@ -751,16 +885,19 @@ namespace blockchain
             continue;
           }
 
-          nlohmann::json row = tx.toJson();
+          nlohmann::json row = withTxAliases(tx.toJson());
           row["status"] = "pending";
           row["blockHeight"] = nullptr;
           row["blockHash"] = "";
           transactions.push_back(row);
+          pendingTransactions.push_back(row);
         }
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"count", transactions.size()},
-                                    {"transactions", transactions}})
+                                    {"transactions", transactions},
+                                    {"confirmedTransactions", confirmedTransactions},
+                                    {"pendingTransactions", pendingTransactions}})
                         .dump(2);
         return resp;
       }
@@ -782,7 +919,9 @@ namespace blockchain
         nlohmann::json j = nlohmann::json::array();
         for (const auto &tx : txs)
         {
-          j.push_back(tx.toJson());
+          nlohmann::json row = withTxAliases(tx.toJson());
+          row["status"] = "pending";
+          j.push_back(row);
         }
 
         nlohmann::json out;
@@ -807,6 +946,13 @@ namespace blockchain
     {
       try
       {
+        if (!isValidAddress(address))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Wallet address format is invalid");
+        }
+
+        knownAddresses_.insert(address);
+
         const uint64_t confirmedBalance = walletManager_.getBalance(address);
         const uint64_t confirmedNonce = walletManager_.getLastNonce(address);
         const auto mempool = blockchain_.getMempool();
@@ -857,6 +1003,11 @@ namespace blockchain
     {
       try
       {
+        if (!isValidAddress(address))
+        {
+          return errorResponse(400, "Bad Request", "INVALID_ADDRESS", "Wallet address format is invalid");
+        }
+
         auto txs = walletManager_.getTransactions(address);
         auto mempool = blockchain_.getMempool();
         auto chain = blockchain_.getChain();
@@ -871,9 +1022,11 @@ namespace blockchain
           }
         }
         nlohmann::json list = nlohmann::json::array();
+        nlohmann::json confirmedTransactions = nlohmann::json::array();
+        nlohmann::json pendingTransactions = nlohmann::json::array();
         for (const auto &tx : txs)
         {
-          nlohmann::json row = tx.toJson();
+          nlohmann::json row = withTxAliases(tx.toJson());
           row["direction"] = tx.isCoinbase() ? "reward" : (tx.fromAddress == address ? "sent" : "received");
           row["status"] = "confirmed";
           const auto metaIt = txBlockMeta.find(tx.txID);
@@ -888,6 +1041,7 @@ namespace blockchain
             row["blockHash"] = "";
           }
           list.push_back(row);
+          confirmedTransactions.push_back(row);
           confirmedTxIds.insert(tx.txID);
         }
 
@@ -902,18 +1056,21 @@ namespace blockchain
             continue;
           }
 
-          nlohmann::json row = tx.toJson();
+          nlohmann::json row = withTxAliases(tx.toJson());
           row["direction"] = tx.isCoinbase() ? "reward" : (tx.fromAddress == address ? "sent" : "received");
           row["status"] = "pending";
           row["blockHeight"] = nullptr;
           row["blockHash"] = "";
           list.push_back(row);
+          pendingTransactions.push_back(row);
         }
 
         HttpResponse resp;
         resp.body = nlohmann::json({{"address", address},
                                     {"count", list.size()},
-                                    {"transactions", list}})
+                                    {"transactions", list},
+                                    {"confirmedTransactions", confirmedTransactions},
+                                    {"pendingTransactions", pendingTransactions}})
                         .dump(2);
         return resp;
       }

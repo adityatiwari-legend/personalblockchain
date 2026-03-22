@@ -1,9 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
-import { addressFromPublicKey, derivePublicKey, signMessage } from '../services/walletCrypto';
+import { isValidPrivateKey, normalizePrivateKey } from '../services/validation';
 import { useWalletStore } from '../store/useWalletStore';
 import WalletCreatedModal from '../components/WalletCreatedModal';
+
+const WALLET_CREATION_STATE_KEY = 'walletCreationState';
+
+function persistCreationState(wallet) {
+  if (!wallet) {
+    localStorage.removeItem(WALLET_CREATION_STATE_KEY);
+    return;
+  }
+  localStorage.setItem(WALLET_CREATION_STATE_KEY, JSON.stringify(wallet));
+}
+
+function readCreationState() {
+  try {
+    const raw = localStorage.getItem(WALLET_CREATION_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.privateKey || !parsed?.address || !parsed?.publicKey) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -14,15 +38,27 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const saveAndLogin = async ({ privateKey, publicKey, address }) => {
-    const challengeResp = await blockchainApi.loginChallenge(address, publicKey);
-    const signature = await signMessage(privateKey, challengeResp.challenge);
-    const loginResp = await blockchainApi.verifyLogin(address, publicKey, challengeResp.challenge, signature);
+  useEffect(() => {
+    const pendingCreation = readCreationState();
+    if (pendingCreation) {
+      setCreatedWallet(pendingCreation);
+      setShowWalletModal(true);
+    }
+  }, []);
+
+  const saveAndLogin = async (privateKey, expectedWallet = null) => {
+    const loginResp = await blockchainApi.walletLogin(privateKey);
+
+    if (expectedWallet) {
+      if (expectedWallet.address !== loginResp.address || expectedWallet.publicKey !== loginResp.publicKey) {
+        throw new Error('Wallet verification failed: generated wallet does not match login result');
+      }
+    }
 
     const walletData = {
       privateKey,
-      publicKey,
-      address,
+      publicKey: loginResp.publicKey,
+      address: loginResp.address,
       token: loginResp.token,
     };
     unlockWallet(walletData);
@@ -37,6 +73,7 @@ export default function Login() {
       const wallet = await blockchainApi.createWallet();
       setCreatedWallet(wallet);
       setShowWalletModal(true);
+      persistCreationState(wallet);
     } catch (e) {
       setError(e?.response?.data?.error || e.message || 'Create wallet failed');
     } finally {
@@ -44,8 +81,13 @@ export default function Login() {
     }
   };
 
-  const handleWalletModalClose = async () => {
+  const handleWalletModalClose = async (reason) => {
     if (!createdWallet) {
+      setShowWalletModal(false);
+      return;
+    }
+
+    if (reason !== 'confirm') {
       setShowWalletModal(false);
       return;
     }
@@ -53,11 +95,12 @@ export default function Login() {
     const walletToLogin = createdWallet;
     setShowWalletModal(false);
     setCreatedWallet(null);
+    persistCreationState(null);
 
     try {
       setLoading(true);
       setError('');
-      await saveAndLogin(walletToLogin);
+      await saveAndLogin(walletToLogin.privateKey, walletToLogin);
     } catch (e) {
       setError(e?.response?.data?.error || e.message || 'Wallet login failed');
     } finally {
@@ -71,16 +114,12 @@ export default function Login() {
       setLoading(true);
       setError('');
 
-      const normalizedPrivate = privateKey.trim().toLowerCase();
-      const imported = await blockchainApi.importWallet(normalizedPrivate);
-      const derivedPub = derivePublicKey(normalizedPrivate);
-      const derivedAddress = await addressFromPublicKey(derivedPub);
+      const normalizedPrivate = normalizePrivateKey(privateKey);
+      if (!isValidPrivateKey(normalizedPrivate)) {
+        throw new Error('Private key must be exactly 64 hexadecimal characters');
+      }
 
-      await saveAndLogin({
-        privateKey: normalizedPrivate,
-        publicKey: imported.publicKey || derivedPub,
-        address: imported.address || derivedAddress,
-      });
+      await saveAndLogin(normalizedPrivate);
     } catch (e2) {
       setError(e2?.response?.data?.error || e2.message || 'Import wallet failed');
     } finally {
@@ -114,6 +153,7 @@ export default function Login() {
               value={privateKey}
               onChange={(e) => setPrivateKey(e.target.value)}
               placeholder="Paste your private key hex"
+              maxLength={64}
               required
             />
             <button className="btn-secondary w-full" type="submit" disabled={loading || showWalletModal}>

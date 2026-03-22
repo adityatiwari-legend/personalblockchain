@@ -14,6 +14,17 @@ namespace blockchain
 
   namespace
   {
+    std::string deriveAddressV2(const std::string &publicKey)
+    {
+      const std::string digest = crypto::sha256(publicKey);
+      return std::string("PCN_") + digest.substr(0, 40);
+    }
+
+    std::string deriveAddressLegacy(const std::string &publicKey)
+    {
+      return crypto::sha256(publicKey);
+    }
+
     std::string buildTxCore(const Transaction &tx)
     {
       std::ostringstream oss;
@@ -58,8 +69,9 @@ namespace blockchain
       return false;
     }
 
-    std::string expectedFrom = crypto::sha256(senderPublicKey);
-    if (!fromAddress.empty() && fromAddress != expectedFrom)
+    const std::string expectedFromV2 = deriveAddressV2(senderPublicKey);
+    const std::string expectedFromLegacy = deriveAddressLegacy(senderPublicKey);
+    if (!fromAddress.empty() && fromAddress != expectedFromV2 && fromAddress != expectedFromLegacy)
     {
       return false;
     }
@@ -146,11 +158,11 @@ namespace blockchain
     // Backward compatibility for older chain entries.
     if (tx.fromAddress.empty() && !tx.senderPublicKey.empty() && tx.senderPublicKey != "COINBASE")
     {
-      tx.fromAddress = crypto::sha256(tx.senderPublicKey);
+      tx.fromAddress = deriveAddressV2(tx.senderPublicKey);
     }
     if (tx.toAddress.empty() && !tx.receiverPublicKey.empty())
     {
-      tx.toAddress = crypto::sha256(tx.receiverPublicKey);
+      tx.toAddress = deriveAddressV2(tx.receiverPublicKey);
     }
     if (tx.amount == 0 && tx.isCoinbase())
     {
