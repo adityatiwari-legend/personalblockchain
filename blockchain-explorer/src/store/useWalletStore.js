@@ -28,6 +28,7 @@ function readPersistedWallet() {
 export const useWalletStore = create((set) => ({
   wallet: initialWallet,
   isUnlocked: !!initialWallet,
+  hasHydrated: false,
 
   unlockWallet: (walletData) => {
     persistWallet(walletData);
@@ -42,16 +43,17 @@ export const useWalletStore = create((set) => ({
     set({
       wallet: null,
       isUnlocked: false,
+      hasHydrated: true,
     });
   },
 
   hydrate: () => {
     const wallet = readPersistedWallet();
     if (!wallet) {
-      set({ wallet: null, isUnlocked: false });
+      set({ wallet: null, isUnlocked: false, hasHydrated: true });
       return;
     }
 
-    set({ wallet, isUnlocked: true });
+    set({ wallet, isUnlocked: true, hasHydrated: true });
   }
 }));
