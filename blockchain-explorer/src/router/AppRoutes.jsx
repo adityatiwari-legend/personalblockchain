@@ -14,6 +14,12 @@ const Settings = lazy(() => import('../pages/Settings'));
 
 function GuardedRoute({ children }) {
   const isUnlocked = useWalletStore((state) => state.isUnlocked);
+  const hasHydrated = useWalletStore((state) => state.hasHydrated);
+
+  if (!hasHydrated) {
+    return <PageFallback />;
+  }
+
   return isUnlocked ? children : <Navigate to="/login" replace />;
 }
 
@@ -30,11 +36,16 @@ function PageFallback() {
 
 export default function AppRoutes() {
   const isUnlocked = useWalletStore((state) => state.isUnlocked);
+  const hasHydrated = useWalletStore((state) => state.hasHydrated);
+
+  if (!hasHydrated) {
+    return <PageFallback />;
+  }
 
   return (
     <Suspense fallback={<PageFallback />}>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={isUnlocked ? <Navigate to="/wallet" replace /> : <Login />} />
 
         <Route
           path="/wallet"

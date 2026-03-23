@@ -33,6 +33,20 @@ export default function WalletDashboard() {
     return () => window.clearInterval(timer);
   }, [cooldownRemaining]);
 
+  useEffect(() => {
+    if (!wallet) {
+      return undefined;
+    }
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [wallet]);
+
   const { data: balanceData = { balance: 0, nextNonce: 1 } } = useQuery({
     queryKey: ['balance', address],
     queryFn: () => blockchainApi.getWalletBalance(address),
